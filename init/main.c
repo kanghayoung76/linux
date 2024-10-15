@@ -1450,6 +1450,41 @@ void __weak free_initmem(void)
 	free_initmem_default(POISON_FREE_INITMEM);
 }
 
+static void sfk_doublemapping(void)
+{
+        printk("#### entering pgd mapping\n");
+        unsigned long long *addr;
+        addr = (unsigned long long *)0xffffffd803aa8000;	///0x10000000 virtual address pte address on board
+//      addr = (unsigned long long *)0xffffffd802a0c000;	///0x10000000 virtual address pte address on qemu
+        unsigned long long val = (csr_read(CSR_SATP) & 0xFFFFF);
+        val = (val << 10) & (~1023);
+        val |= 0xd7;						///calc pte value
+
+
+        printk("#########set guest page table#############\n");
+        printk("before > addr : 0x%llx, value : 0x%llx\n", (unsigned long long)addr, *addr);
+        *addr = val;	///pte write
+        printk("after > addr : 0x%llx, value : 0x%llx\n", (unsigned long long)addr, *addr); 
+
+
+        printk("#### tlb flush\n");
+        asm volatile("sfence.vma" ::: "memory");
+
+        void* base = (void*)0x10000000;
+        unsigned long vall = 0;
+
+//        asm volatile(HLV_W(%[val], %[addr]) :[val] "=&r" (vall): [addr] "r" (base) );
+        printk("hlv 0x%lx : 0x%lx\n",base,vall);	///hlv value
+
+        pte_t *pgd;
+        pte_t *vval;
+        pgd = phys_to_virt((csr_read(CSR_SATP) & 0xFFFFF) << PAGE_SHIFT);
+        vval = &pgd[0];
+        printk("&pgd[0] : 0x%lx, pgd[0] value : 0x%lx\n", vval, *vval);		///ld value
+
+}
+
+
 static int __ref kernel_init(void *unused)
 {
 	int ret;
@@ -1486,6 +1521,7 @@ static int __ref kernel_init(void *unused)
 
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
+		sfk_doublemapping();
 		if (!ret)
 			return 0;
 		pr_err("Failed to execute %s (error %d)\n",

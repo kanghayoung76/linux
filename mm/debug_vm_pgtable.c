@@ -57,6 +57,8 @@
 #define RANDOM_ORVALUE (GENMASK(BITS_PER_LONG - 1, 0) & ~ARCH_SKIP_MASK)
 #define RANDOM_NZVALUE	GENMASK(7, 0)
 
+#define gstage_pgd_size    (1UL << (HGATP_PAGE_SHIFT + 2))      ////
+
 struct pgtable_debug_args {
 	struct mm_struct	*mm;
 	struct vm_area_struct	*vma;
@@ -1301,8 +1303,43 @@ error:
 	return ret;
 }
 
+static void sfk_create_guest_page_table(void)
+{
+	printk("#### entering alloc_pgd\n");
+
+        struct page *pgd_page;
+
+        pgd_page = (struct page *)alloc_pages(GFP_KERNEL | __GFP_ZERO, get_order(gstage_pgd_size));	/// create pgd 
+        printk("pgd(vir) : 0x%lx\n", page_to_virt(pgd_page));
+        printk("pgd(phy) : 0x%lx\n", page_to_phys(pgd_page));
+
+        printk("#### update HGATP\n");
+        unsigned long hgatp = (HGATP_MODE_SV39X4 << HGATP_MODE_SHIFT);
+        hgatp |= (page_to_phys(pgd_page) >> PAGE_SHIFT) & GENMASK(43,0);
+        csr_write(CSR_HGATP, hgatp);				/// hgatp update pointing pgd 
+        printk("hgatp : 0x%lx\n",csr_read(CSR_HGATP));
+        printk("satp : 0x%lx\n",csr_read(CSR_SATP));
+
+        printk("#### entering pgd mapping\n");
+        pgprot_t pprot;
+        pprot.pgprot = _PAGE_READ | _PAGE_WRITE;
+        printk("pgd(vir) : 0x%lx\n",phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT));
+        printk("pa : 0x%lx\n",(csr_read(CSR_SATP) & 0xFFFFF) << PAGE_SHIFT);
+        create_pgd_mapping(phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT),0x10000000,0x81709000,PAGE_SIZE,pprot);
+ 	/// create 3-level page table for 0x10000000 virtual address, 0x81709000 physical page
+
+        printk("#### tlb flush\n");
+        asm volatile("sfence.vma" ::: "memory");
+
+}
+
+
+
 static int __init debug_vm_pgtable(void)
 {
+	
+	sfk_create_guest_page_table(); 		/////
+
 	struct pgtable_debug_args args;
 	spinlock_t *ptl = NULL;
 	int idx, ret;
