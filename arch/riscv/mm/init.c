@@ -1208,6 +1208,7 @@ static void __init create_linear_mapping_range(phys_addr_t start,
 {
 	phys_addr_t pa;
 	uintptr_t va, map_size;
+	uintptr_t shadow_va;
 
 	for (pa = start; pa < end; pa += map_size) {
 		va = (uintptr_t)__va(pa);
@@ -1216,6 +1217,14 @@ static void __init create_linear_mapping_range(phys_addr_t start,
 
 		create_pgd_mapping(swapper_pg_dir, va, pa, map_size,
 				   pgprot_from_va(va));
+#ifdef CONFIG_GENESIS
+                        /* Create shadow mappings */
+                        shadow_va = (uintptr_t)__virt_to_shadow(va);
+                        //pr_info("va: %lx pa: %llx\n", shadow_va, pa);
+                        create_pgd_mapping(swapper_pg_dir, shadow_va, pa,
+                                           map_size, PAGE_SHADOW);
+#endif
+
 	}
 }
 
@@ -1283,6 +1292,17 @@ static void __init create_linear_mapping_page_table(void)
 static void __init setup_vm_final(void)
 {
 	/* Setup swapper PGD for fixmap */
+        uintptr_t va, map_size;
+        phys_addr_t pa, start, end;
+        u64 i;
+#ifdef CONFIG_GENESIS
+        uintptr_t shadow_va;
+        phys_addr_t prev_memblock_current_limit;
+
+        pr_info("[GENESIS] Open GENESIS_ZONE to memblock \n");
+        prev_memblock_current_limit = memblock_get_current_limit();
+        memblock_set_current_limit(MEMBLOCK_ALLOC_ANYWHERE);
+#endif
 #if !defined(CONFIG_64BIT)
 	/*
 	 * In 32-bit, the device tree lies in a pgd entry, so it must be copied
@@ -1317,6 +1337,11 @@ static void __init setup_vm_final(void)
 	/* Move to swapper page table */
 	csr_write(CSR_SATP, PFN_DOWN(__pa_symbol(swapper_pg_dir)) | satp_mode);
 	local_flush_tlb_all();
+
+#ifdef CONFIG_GENESIS
+        pr_info("[GENESIS] Close GENESIS_ZONE to memblock!\n");
+        memblock_set_current_limit(prev_memblock_current_limit);
+#endif
 
 	pt_ops_set_late();
 }
