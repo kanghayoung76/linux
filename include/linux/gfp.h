@@ -14,6 +14,8 @@
 #endif
 #define __GFP_GENESIS   ((__force gfp_t)___GFP_GENESIS)
 
+#define __GFP_BITS_SHIFT (28 + IS_ENABLED(CONFIG_GENESIS))
+
 
 struct vm_area_struct;
 
@@ -98,6 +100,8 @@ static inline bool gfpflags_allow_blocking(const gfp_t gfp_flags)
 #if defined(CONFIG_ZONE_DEVICE) && (MAX_NR_ZONES-1) <= 4
 /* ZONE_DEVICE is not a valid GFP zone specifier */
 #define GFP_ZONES_SHIFT 2
+#elif defined(CONFIG_GENESIS) && (MAX_NR_ZONES-1) <= 4
+#define GFP_ZONES_SHIFT 2
 #else
 #define GFP_ZONES_SHIFT ZONES_SHIFT
 #endif
@@ -138,6 +142,10 @@ static inline enum zone_type gfp_zone(gfp_t flags)
 {
 	enum zone_type z;
 	int bit = (__force int) (flags & GFP_ZONEMASK);
+
+#ifdef CONFIG_GENESIS
+	if (flags & __GFP_GENESIS) return ZONE_GENESIS;
+#endif
 
 	z = (GFP_ZONE_TABLE >> (bit * GFP_ZONES_SHIFT)) &
 					 ((1 << GFP_ZONES_SHIFT) - 1);

@@ -326,6 +326,9 @@ int sysctl_lowmem_reserve_ratio[MAX_NR_ZONES] = {
 	[ZONE_HIGHMEM] = 0,
 #endif
 	[ZONE_MOVABLE] = 0,
+#ifdef CONFIG_GENESIS
+	[ZONE_GENESIS] = 0,
+#endif
 };
 
 char * const zone_names[MAX_NR_ZONES] = {
@@ -340,6 +343,9 @@ char * const zone_names[MAX_NR_ZONES] = {
 	 "HighMem",
 #endif
 	 "Movable",
+#ifdef CONFIG_GENESIS
+         "Genesis"
+#endif
 #ifdef CONFIG_ZONE_DEVICE
 	 "Device",
 #endif
