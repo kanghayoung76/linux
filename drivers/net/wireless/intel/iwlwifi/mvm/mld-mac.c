@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 /*
- * Copyright (C) 2022 Intel Corporation
+ * Copyright (C) 2022 - 2024 Intel Corporation
  */
 #include "mvm.h"
 
@@ -50,7 +50,7 @@ static void iwl_mvm_mld_mac_ctxt_cmd_common(struct iwl_mvm *mvm,
 	 * the association response successfully, so just skip all that
 	 * and enable both when we have MLO.
 	 */
-	if (vif->valid_links) {
+	if (ieee80211_vif_is_mld(vif)) {
 		iwl_mvm_mld_set_he_support(mvm, vif, cmd);
 		cmd->eht_support = cpu_to_le32(1);
 		return;
@@ -96,6 +96,7 @@ static int iwl_mvm_mld_mac_ctxt_cmd_sta(struct iwl_mvm *mvm,
 					u32 action, bool force_assoc_off)
 {
 	struct iwl_mac_config_cmd cmd = {};
+	u16 esr_transition_timeout;
 
 	WARN_ON(vif->type != NL80211_IFTYPE_STATION);
 
@@ -115,16 +116,16 @@ static int iwl_mvm_mld_mac_ctxt_cmd_sta(struct iwl_mvm *mvm,
 	if (vif->cfg.assoc && !force_assoc_off) {
 		struct iwl_mvm_vif *mvmvif = iwl_mvm_vif_from_mac80211(vif);
 
-		cmd.client.is_assoc = cpu_to_le32(1);
+		cmd.client.is_assoc = 1;
 
 		if (!mvmvif->authorized &&
 		    fw_has_capa(&mvm->fw->ucode_capa,
 				IWL_UCODE_TLV_CAPA_COEX_HIGH_PRIO))
 			cmd.client.data_policy |=
-				cpu_to_le32(COEX_HIGH_PRIORITY_ENABLE);
+				cpu_to_le16(COEX_HIGH_PRIORITY_ENABLE);
 
 	} else {
-		cmd.client.is_assoc = cpu_to_le32(0);
+		cmd.client.is_assoc = 0;
 
 		/* Allow beacons to pass through as long as we are not
 		 * associated, or we do not have dtim period information.
@@ -132,14 +133,25 @@ static int iwl_mvm_mld_mac_ctxt_cmd_sta(struct iwl_mvm *mvm,
 		cmd.filter_flags |= cpu_to_le32(MAC_CFG_FILTER_ACCEPT_BEACON);
 	}
 
-	cmd.client.assoc_id = cpu_to_le32(vif->cfg.aid);
+	cmd.client.assoc_id = cpu_to_le16(vif->cfg.aid);
+	if (ieee80211_vif_is_mld(vif)) {
+		esr_transition_timeout =
+			u16_get_bits(vif->cfg.eml_cap,
+				     IEEE80211_EML_CAP_TRANSITION_TIMEOUT);
+
+		cmd.client.esr_transition_timeout =
+			min_t(u16, IEEE80211_EML_CAP_TRANSITION_TIMEOUT_128TU,
+			      esr_transition_timeout);
+		cmd.client.medium_sync_delay =
+			cpu_to_le16(vif->cfg.eml_med_sync_delay);
+	}
 
 	if (vif->probe_req_reg && vif->cfg.assoc && vif->p2p)
 		cmd.filter_flags |= cpu_to_le32(MAC_CFG_FILTER_ACCEPT_PROBE_REQ);
 
 	if (vif->bss_conf.he_support && !iwlwifi_mod_params.disable_11ax)
 		cmd.client.data_policy |=
-			iwl_mvm_mac_ctxt_cmd_sta_get_twt_policy(mvm, vif);
+			cpu_to_le16(iwl_mvm_mac_ctxt_cmd_sta_get_twt_policy(mvm, vif));
 
 	return iwl_mvm_mld_mac_ctxt_send_cmd(mvm, &cmd);
 }
@@ -155,7 +167,7 @@ static int iwl_mvm_mld_mac_ctxt_cmd_listener(struct iwl_mvm *mvm,
 	iwl_mvm_mld_mac_ctxt_cmd_common(mvm, vif, &cmd, action);
 
 	cmd.filter_flags = cpu_to_le32(MAC_CFG_FILTER_PROMISC |
-				       MAC_FILTER_IN_CONTROL_AND_MGMT |
+				       MAC_CFG_FILTER_ACCEPT_CONTROL_AND_MGMT |
 				       MAC_CFG_FILTER_ACCEPT_BEACON |
 				       MAC_CFG_FILTER_ACCEPT_PROBE_REQ |
 				       MAC_CFG_FILTER_ACCEPT_GRP);
@@ -193,8 +205,11 @@ static int iwl_mvm_mld_mac_ctxt_cmd_p2p_device(struct iwl_mvm *mvm,
 	cmd.p2p_dev.is_disc_extended =
 		iwl_mac_ctxt_p2p_dev_has_extended_disc(mvm, vif);
 
-	/* Override the filter flags to accept only probe requests */
-	cmd.filter_flags = cpu_to_le32(MAC_CFG_FILTER_ACCEPT_PROBE_REQ);
+	/* Override the filter flags to accept all management frames. This is
+	 * needed to support both P2P device discovery using probe requests and
+	 * P2P service discovery using action frames
+	 */
+	cmd.filter_flags = cpu_to_le32(MAC_CFG_FILTER_ACCEPT_CONTROL_AND_MGMT);
 
 	return iwl_mvm_mld_mac_ctxt_send_cmd(mvm, &cmd);
 }

@@ -41,10 +41,13 @@
 #include <linux/random.h>
 #include <linux/xarray.h>
 #include <linux/prefetch.h>
+#include <linux/debugfs.h>
+#include <linux/async.h>
+#include <linux/cleanup.h>
 
 #include <net/checksum.h>
 
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
@@ -66,6 +69,8 @@ static const char *sdebug_version_date = "20210520";
 
 /* Additional Sense Code (ASC) */
 #define NO_ADDITIONAL_SENSE 0x0
+#define OVERLAP_ATOMIC_COMMAND_ASC 0x0
+#define OVERLAP_ATOMIC_COMMAND_ASCQ 0x23
 #define LOGICAL_UNIT_NOT_READY 0x4
 #define LOGICAL_UNIT_COMMUNICATION_FAILURE 0x8
 #define UNRECOVERED_READ_ERR 0x11
@@ -100,6 +105,7 @@ static const char *sdebug_version_date = "20210520";
 #define READ_BOUNDARY_ASCQ 0x7
 #define ATTEMPT_ACCESS_GAP 0x9
 #define INSUFF_ZONE_ASCQ 0xe
+/* see drivers/scsi/sense_codes.h */
 
 /* Additional Sense Code Qualifier (ASCQ) */
 #define ACK_NAK_TO 0x3
@@ -149,6 +155,12 @@ static const char *sdebug_version_date = "20210520";
 #define DEF_VIRTUAL_GB   0
 #define DEF_VPD_USE_HOSTNO 1
 #define DEF_WRITESAME_LENGTH 0xFFFF
+#define DEF_ATOMIC_WR 0
+#define DEF_ATOMIC_WR_MAX_LENGTH 8192
+#define DEF_ATOMIC_WR_ALIGN 2
+#define DEF_ATOMIC_WR_GRAN 2
+#define DEF_ATOMIC_WR_MAX_LENGTH_BNDRY (DEF_ATOMIC_WR_MAX_LENGTH)
+#define DEF_ATOMIC_WR_MAX_BNDRY 128
 #define DEF_STRICT 0
 #define DEF_STATISTICS false
 #define DEF_SUBMIT_QUEUES 1
@@ -285,6 +297,46 @@ struct sdeb_zone_state {	/* ZBC: per zone state */
 	sector_t z_wp;
 };
 
+enum sdebug_err_type {
+	ERR_TMOUT_CMD		= 0,	/* make specific scsi command timeout */
+	ERR_FAIL_QUEUE_CMD	= 1,	/* make specific scsi command's */
+					/* queuecmd return failed */
+	ERR_FAIL_CMD		= 2,	/* make specific scsi command's */
+					/* queuecmd return succeed but */
+					/* with errors set in scsi_cmnd */
+	ERR_ABORT_CMD_FAILED	= 3,	/* control return FAILED from */
+					/* scsi_debug_abort() */
+	ERR_LUN_RESET_FAILED	= 4,	/* control return FAILED from */
+					/* scsi_debug_device_reseLUN_RESET_FAILEDt() */
+};
+
+struct sdebug_err_inject {
+	int type;
+	struct list_head list;
+	int cnt;
+	unsigned char cmd;
+	struct rcu_head rcu;
+
+	union {
+		/*
+		 * For ERR_FAIL_QUEUE_CMD
+		 */
+		int queuecmd_ret;
+
+		/*
+		 * For ERR_FAIL_CMD
+		 */
+		struct {
+			unsigned char host_byte;
+			unsigned char driver_byte;
+			unsigned char status_byte;
+			unsigned char sense_key;
+			unsigned char asc;
+			unsigned char asq;
+		};
+	};
+};
+
 struct sdebug_dev_info {
 	struct list_head dev_list;
 	unsigned int channel;
@@ -297,7 +349,7 @@ struct sdebug_dev_info {
 	bool used;
 
 	/* For ZBC devices */
-	enum blk_zoned_model zmodel;
+	bool zoned;
 	unsigned int zcap;
 	unsigned int zsize;
 	unsigned int zsize_shift;
@@ -310,6 +362,15 @@ struct sdebug_dev_info {
 	unsigned int max_open;
 	ktime_t create_ts;	/* time since bootup that this device was created */
 	struct sdeb_zone_state *zstate;
+
+	struct dentry *debugfs_entry;
+	struct spinlock list_lock;
+	struct list_head inject_err_list;
+};
+
+struct sdebug_target_info {
+	bool reset_fail;
+	struct dentry *debugfs_entry;
 };
 
 struct sdebug_host_info {
@@ -322,7 +383,9 @@ struct sdebug_host_info {
 
 /* There is an xarray of pointers to this struct's objects, one per host */
 struct sdeb_store_info {
-	rwlock_t macc_lck;	/* for atomic media access on this store */
+	rwlock_t macc_data_lck;	/* for media data access on this store */
+	rwlock_t macc_meta_lck;	/* for atomic media meta access on this store */
+	rwlock_t macc_sector_lck;	/* per-sector media data access on this store */
 	u8 *storep;		/* user data storage (ram) */
 	struct t10_pi_tuple *dif_storep; /* protection info */
 	void *map_storep;	/* provisioning map */
@@ -346,12 +409,20 @@ struct sdebug_defer {
 	enum sdeb_defer_type defer_t;
 };
 
+struct sdebug_device_access_info {
+	bool atomic_write;
+	u64 lba;
+	u32 num;
+	struct scsi_cmnd *self;
+};
+
 struct sdebug_queued_cmd {
 	/* corresponding bit set in in_use_bm[] in owning struct sdebug_queue
 	 * instance indicates this slot is in use.
 	 */
 	struct sdebug_defer sd_dp;
 	struct scsi_cmnd *scmd;
+	struct sdebug_device_access_info *i;
 };
 
 struct sdebug_scsi_cmd {
@@ -411,7 +482,8 @@ enum sdeb_opcode_index {
 	SDEB_I_PRE_FETCH = 29,		/* 10, 16 */
 	SDEB_I_ZONE_OUT = 30,		/* 0x94+SA; includes no data xfer */
 	SDEB_I_ZONE_IN = 31,		/* 0x95+SA; all have data-in */
-	SDEB_I_LAST_ELEM_P1 = 32,	/* keep this last (previous + 1) */
+	SDEB_I_ATOMIC_WRITE_16 = 32,
+	SDEB_I_LAST_ELEM_P1 = 33,	/* keep this last (previous + 1) */
 };
 
 
@@ -445,7 +517,8 @@ static const unsigned char opcode_ind_arr[256] = {
 	0, 0, 0, SDEB_I_VERIFY,
 	SDEB_I_PRE_FETCH, SDEB_I_SYNC_CACHE, 0, SDEB_I_WRITE_SAME,
 	SDEB_I_ZONE_OUT, SDEB_I_ZONE_IN, 0, 0,
-	0, 0, 0, 0, 0, 0, SDEB_I_SERV_ACT_IN_16, SDEB_I_SERV_ACT_OUT_16,
+	0, 0, 0, 0,
+	SDEB_I_ATOMIC_WRITE_16, 0, SDEB_I_SERV_ACT_IN_16, SDEB_I_SERV_ACT_OUT_16,
 /* 0xa0; 0xa0->0xbf: 12 byte cdbs */
 	SDEB_I_REPORT_LUNS, SDEB_I_ATA_PT, 0, SDEB_I_MAINT_IN,
 	     SDEB_I_MAINT_OUT, 0, 0, 0,
@@ -481,6 +554,8 @@ static int resp_write_scat(struct scsi_cmnd *, struct sdebug_dev_info *);
 static int resp_start_stop(struct scsi_cmnd *, struct sdebug_dev_info *);
 static int resp_readcap16(struct scsi_cmnd *, struct sdebug_dev_info *);
 static int resp_get_lba_status(struct scsi_cmnd *, struct sdebug_dev_info *);
+static int resp_get_stream_status(struct scsi_cmnd *scp,
+				  struct sdebug_dev_info *devip);
 static int resp_report_tgtpgs(struct scsi_cmnd *, struct sdebug_dev_info *);
 static int resp_unmap(struct scsi_cmnd *, struct sdebug_dev_info *);
 static int resp_rsup_opcodes(struct scsi_cmnd *, struct sdebug_dev_info *);
@@ -493,6 +568,7 @@ static int resp_write_buffer(struct scsi_cmnd *, struct sdebug_dev_info *);
 static int resp_sync_cache(struct scsi_cmnd *, struct sdebug_dev_info *);
 static int resp_pre_fetch(struct scsi_cmnd *, struct sdebug_dev_info *);
 static int resp_report_zones(struct scsi_cmnd *, struct sdebug_dev_info *);
+static int resp_atomic_write(struct scsi_cmnd *, struct sdebug_dev_info *);
 static int resp_open_zone(struct scsi_cmnd *, struct sdebug_dev_info *);
 static int resp_close_zone(struct scsi_cmnd *, struct sdebug_dev_info *);
 static int resp_finish_zone(struct scsi_cmnd *, struct sdebug_dev_info *);
@@ -555,6 +631,9 @@ static const struct opcode_info_t sa_in_16_iarr[] = {
 	{0, 0x9e, 0x12, F_SA_LOW | F_D_IN, resp_get_lba_status, NULL,
 	    {16,  0x12, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 	     0xff, 0xff, 0xff, 0, 0xc7} },	/* GET LBA STATUS(16) */
+	{0, 0x9e, 0x16, F_SA_LOW | F_D_IN, resp_get_stream_status, NULL,
+	    {16, 0x16, 0, 0, 0xff, 0xff, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff,
+	     0, 0} },	/* GET STREAM STATUS */
 };
 
 static const struct opcode_info_t vl_iarr[] = {	/* VARIABLE LENGTH */
@@ -731,6 +810,11 @@ static const struct opcode_info_t opcode_info_arr[SDEB_I_LAST_ELEM_P1 + 1] = {
 	    resp_report_zones, zone_in_iarr, /* ZONE_IN(16), REPORT ZONES) */
 		{16,  0x0 /* SA */, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 		 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xbf, 0xc7} },
+/* 31 */
+	{0, 0x0, 0x0, F_D_OUT | FF_MEDIA_IO,
+	    resp_atomic_write, NULL, /* ATOMIC WRITE 16 */
+		{16,  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+		 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff} },
 /* sentinel */
 	{0xff, 0, 0, 0, NULL, NULL,		/* terminating element */
 	    {0,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0} },
@@ -778,6 +862,13 @@ static unsigned int sdebug_unmap_granularity = DEF_UNMAP_GRANULARITY;
 static unsigned int sdebug_unmap_max_blocks = DEF_UNMAP_MAX_BLOCKS;
 static unsigned int sdebug_unmap_max_desc = DEF_UNMAP_MAX_DESC;
 static unsigned int sdebug_write_same_length = DEF_WRITESAME_LENGTH;
+static unsigned int sdebug_atomic_wr = DEF_ATOMIC_WR;
+static unsigned int sdebug_atomic_wr_max_length = DEF_ATOMIC_WR_MAX_LENGTH;
+static unsigned int sdebug_atomic_wr_align = DEF_ATOMIC_WR_ALIGN;
+static unsigned int sdebug_atomic_wr_gran = DEF_ATOMIC_WR_GRAN;
+static unsigned int sdebug_atomic_wr_max_length_bndry =
+			DEF_ATOMIC_WR_MAX_LENGTH_BNDRY;
+static unsigned int sdebug_atomic_wr_max_bndry = DEF_ATOMIC_WR_MAX_BNDRY;
 static int sdebug_uuid_ctl = DEF_UUID_CTL;
 static bool sdebug_random = DEF_RANDOM;
 static bool sdebug_per_host_store = DEF_PER_HOST_STORE;
@@ -792,8 +883,12 @@ static bool have_dif_prot;
 static bool write_since_sync;
 static bool sdebug_statistics = DEF_STATISTICS;
 static bool sdebug_wp;
-/* Following enum: 0: no zbc, def; 1: host aware; 2: host managed */
-static enum blk_zoned_model sdeb_zbc_model = BLK_ZONED_NONE;
+static bool sdebug_allow_restart;
+static enum {
+	BLK_ZONED_NONE	= 0,
+	BLK_ZONED_HA	= 1,
+	BLK_ZONED_HM	= 2,
+} sdeb_zbc_model = BLK_ZONED_NONE;
 static char *sdeb_zbc_model_s;
 
 enum sam_lun_addr_method {SAM_LUN_AM_PERIPHERAL = 0x0,
@@ -841,15 +936,12 @@ static int sdeb_zbc_nr_conv = DEF_ZBC_NR_CONV_ZONES;
 static int submit_queues = DEF_SUBMIT_QUEUES;  /* > 1 for multi-queue (mq) */
 static int poll_queues; /* iouring iopoll interface.*/
 
-static DEFINE_RWLOCK(atomic_rw);
-static DEFINE_RWLOCK(atomic_rw2);
-
-static rwlock_t *ramdisk_lck_a[2];
+static atomic_long_t writes_by_group_number[64];
 
 static char sdebug_proc_name[] = MY_NAME;
 static const char *my_name = MY_NAME;
 
-static struct bus_type pseudo_lld_bus;
+static const struct bus_type pseudo_lld_bus;
 
 static struct device_driver sdebug_driverfs_driver = {
 	.name 		= sdebug_proc_name,
@@ -867,6 +959,262 @@ static const int device_qfull_result =
 
 static const int condition_met_result = SAM_STAT_CONDITION_MET;
 
+static struct dentry *sdebug_debugfs_root;
+static ASYNC_DOMAIN_EXCLUSIVE(sdebug_async_domain);
+
+static void sdebug_err_free(struct rcu_head *head)
+{
+	struct sdebug_err_inject *inject =
+		container_of(head, typeof(*inject), rcu);
+
+	kfree(inject);
+}
+
+static void sdebug_err_add(struct scsi_device *sdev, struct sdebug_err_inject *new)
+{
+	struct sdebug_dev_info *devip = (struct sdebug_dev_info *)sdev->hostdata;
+	struct sdebug_err_inject *err;
+
+	spin_lock(&devip->list_lock);
+	list_for_each_entry_rcu(err, &devip->inject_err_list, list) {
+		if (err->type == new->type && err->cmd == new->cmd) {
+			list_del_rcu(&err->list);
+			call_rcu(&err->rcu, sdebug_err_free);
+		}
+	}
+
+	list_add_tail_rcu(&new->list, &devip->inject_err_list);
+	spin_unlock(&devip->list_lock);
+}
+
+static int sdebug_err_remove(struct scsi_device *sdev, const char *buf, size_t count)
+{
+	struct sdebug_dev_info *devip = (struct sdebug_dev_info *)sdev->hostdata;
+	struct sdebug_err_inject *err;
+	int type;
+	unsigned char cmd;
+
+	if (sscanf(buf, "- %d %hhx", &type, &cmd) != 2) {
+		kfree(buf);
+		return -EINVAL;
+	}
+
+	spin_lock(&devip->list_lock);
+	list_for_each_entry_rcu(err, &devip->inject_err_list, list) {
+		if (err->type == type && err->cmd == cmd) {
+			list_del_rcu(&err->list);
+			call_rcu(&err->rcu, sdebug_err_free);
+			spin_unlock(&devip->list_lock);
+			kfree(buf);
+			return count;
+		}
+	}
+	spin_unlock(&devip->list_lock);
+
+	kfree(buf);
+	return -EINVAL;
+}
+
+static int sdebug_error_show(struct seq_file *m, void *p)
+{
+	struct scsi_device *sdev = (struct scsi_device *)m->private;
+	struct sdebug_dev_info *devip = (struct sdebug_dev_info *)sdev->hostdata;
+	struct sdebug_err_inject *err;
+
+	seq_puts(m, "Type\tCount\tCommand\n");
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(err, &devip->inject_err_list, list) {
+		switch (err->type) {
+		case ERR_TMOUT_CMD:
+		case ERR_ABORT_CMD_FAILED:
+		case ERR_LUN_RESET_FAILED:
+			seq_printf(m, "%d\t%d\t0x%x\n", err->type, err->cnt,
+				err->cmd);
+		break;
+
+		case ERR_FAIL_QUEUE_CMD:
+			seq_printf(m, "%d\t%d\t0x%x\t0x%x\n", err->type,
+				err->cnt, err->cmd, err->queuecmd_ret);
+		break;
+
+		case ERR_FAIL_CMD:
+			seq_printf(m, "%d\t%d\t0x%x\t0x%x 0x%x 0x%x 0x%x 0x%x 0x%x\n",
+				err->type, err->cnt, err->cmd,
+				err->host_byte, err->driver_byte,
+				err->status_byte, err->sense_key,
+				err->asc, err->asq);
+		break;
+		}
+	}
+	rcu_read_unlock();
+
+	return 0;
+}
+
+static int sdebug_error_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, sdebug_error_show, inode->i_private);
+}
+
+static ssize_t sdebug_error_write(struct file *file, const char __user *ubuf,
+		size_t count, loff_t *ppos)
+{
+	char *buf;
+	unsigned int inject_type;
+	struct sdebug_err_inject *inject;
+	struct scsi_device *sdev = (struct scsi_device *)file->f_inode->i_private;
+
+	buf = kzalloc(count + 1, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	if (copy_from_user(buf, ubuf, count)) {
+		kfree(buf);
+		return -EFAULT;
+	}
+
+	if (buf[0] == '-')
+		return sdebug_err_remove(sdev, buf, count);
+
+	if (sscanf(buf, "%d", &inject_type) != 1) {
+		kfree(buf);
+		return -EINVAL;
+	}
+
+	inject = kzalloc(sizeof(struct sdebug_err_inject), GFP_KERNEL);
+	if (!inject) {
+		kfree(buf);
+		return -ENOMEM;
+	}
+
+	switch (inject_type) {
+	case ERR_TMOUT_CMD:
+	case ERR_ABORT_CMD_FAILED:
+	case ERR_LUN_RESET_FAILED:
+		if (sscanf(buf, "%d %d %hhx", &inject->type, &inject->cnt,
+			   &inject->cmd) != 3)
+			goto out_error;
+	break;
+
+	case ERR_FAIL_QUEUE_CMD:
+		if (sscanf(buf, "%d %d %hhx %x", &inject->type, &inject->cnt,
+			   &inject->cmd, &inject->queuecmd_ret) != 4)
+			goto out_error;
+	break;
+
+	case ERR_FAIL_CMD:
+		if (sscanf(buf, "%d %d %hhx %hhx %hhx %hhx %hhx %hhx %hhx",
+			   &inject->type, &inject->cnt, &inject->cmd,
+			   &inject->host_byte, &inject->driver_byte,
+			   &inject->status_byte, &inject->sense_key,
+			   &inject->asc, &inject->asq) != 9)
+			goto out_error;
+	break;
+
+	default:
+		goto out_error;
+	break;
+	}
+
+	kfree(buf);
+	sdebug_err_add(sdev, inject);
+
+	return count;
+
+out_error:
+	kfree(buf);
+	kfree(inject);
+	return -EINVAL;
+}
+
+static const struct file_operations sdebug_error_fops = {
+	.open	= sdebug_error_open,
+	.read	= seq_read,
+	.write	= sdebug_error_write,
+	.release = single_release,
+};
+
+static int sdebug_target_reset_fail_show(struct seq_file *m, void *p)
+{
+	struct scsi_target *starget = (struct scsi_target *)m->private;
+	struct sdebug_target_info *targetip =
+		(struct sdebug_target_info *)starget->hostdata;
+
+	if (targetip)
+		seq_printf(m, "%c\n", targetip->reset_fail ? 'Y' : 'N');
+
+	return 0;
+}
+
+static int sdebug_target_reset_fail_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, sdebug_target_reset_fail_show, inode->i_private);
+}
+
+static ssize_t sdebug_target_reset_fail_write(struct file *file,
+		const char __user *ubuf, size_t count, loff_t *ppos)
+{
+	int ret;
+	struct scsi_target *starget =
+		(struct scsi_target *)file->f_inode->i_private;
+	struct sdebug_target_info *targetip =
+		(struct sdebug_target_info *)starget->hostdata;
+
+	if (targetip) {
+		ret = kstrtobool_from_user(ubuf, count, &targetip->reset_fail);
+		return ret < 0 ? ret : count;
+	}
+	return -ENODEV;
+}
+
+static const struct file_operations sdebug_target_reset_fail_fops = {
+	.open	= sdebug_target_reset_fail_open,
+	.read	= seq_read,
+	.write	= sdebug_target_reset_fail_write,
+	.release = single_release,
+};
+
+static int sdebug_target_alloc(struct scsi_target *starget)
+{
+	struct sdebug_target_info *targetip;
+
+	targetip = kzalloc(sizeof(struct sdebug_target_info), GFP_KERNEL);
+	if (!targetip)
+		return -ENOMEM;
+
+	async_synchronize_full_domain(&sdebug_async_domain);
+
+	targetip->debugfs_entry = debugfs_create_dir(dev_name(&starget->dev),
+				sdebug_debugfs_root);
+
+	debugfs_create_file("fail_reset", 0600, targetip->debugfs_entry, starget,
+				&sdebug_target_reset_fail_fops);
+
+	starget->hostdata = targetip;
+
+	return 0;
+}
+
+static void sdebug_tartget_cleanup_async(void *data, async_cookie_t cookie)
+{
+	struct sdebug_target_info *targetip = data;
+
+	debugfs_remove(targetip->debugfs_entry);
+	kfree(targetip);
+}
+
+static void sdebug_target_destroy(struct scsi_target *starget)
+{
+	struct sdebug_target_info *targetip;
+
+	targetip = (struct sdebug_target_info *)starget->hostdata;
+	if (targetip) {
+		starget->hostdata = NULL;
+		async_schedule_domain(sdebug_tartget_cleanup_async, targetip,
+				&sdebug_async_domain);
+	}
+}
 
 /* Only do the extra work involved in logical block provisioning if one or
  * more of the lbpu, lbpws or lbpws10 parameters are given and we are doing
@@ -876,6 +1224,11 @@ static inline bool scsi_debug_lbp(void)
 {
 	return 0 == sdebug_fake_rw &&
 		(sdebug_lbpu || sdebug_lbpws || sdebug_lbpws10);
+}
+
+static inline bool scsi_debug_atomic_write(void)
+{
+	return sdebug_fake_rw == 0 && sdebug_atomic_wr;
 }
 
 static void *lba2fake_store(struct sdeb_store_info *sip,
@@ -1505,6 +1858,14 @@ static int inquiry_vpd_b0(unsigned char *arr)
 	/* Maximum WRITE SAME Length */
 	put_unaligned_be64(sdebug_write_same_length, &arr[32]);
 
+	if (sdebug_atomic_wr) {
+		put_unaligned_be32(sdebug_atomic_wr_max_length, &arr[40]);
+		put_unaligned_be32(sdebug_atomic_wr_align, &arr[44]);
+		put_unaligned_be32(sdebug_atomic_wr_gran, &arr[48]);
+		put_unaligned_be32(sdebug_atomic_wr_max_length_bndry, &arr[52]);
+		put_unaligned_be32(sdebug_atomic_wr_max_bndry, &arr[56]);
+	}
+
 	return 0x3c; /* Mandatory page length for Logical Block Provisioning */
 }
 
@@ -1516,8 +1877,6 @@ static int inquiry_vpd_b1(struct sdebug_dev_info *devip, unsigned char *arr)
 	arr[1] = 1;	/* non rotating medium (e.g. solid state) */
 	arr[2] = 0;
 	arr[3] = 5;	/* less than 1.8" */
-	if (devip->zmodel == BLK_ZONED_HA)
-		arr[4] = 1 << 4;	/* zoned field = 01b */
 
 	return 0x3c;
 }
@@ -1567,6 +1926,19 @@ static int inquiry_vpd_b6(struct sdebug_dev_info *devip, unsigned char *arr)
 	return 0x3c;
 }
 
+#define SDEBUG_BLE_LEN_AFTER_B4 28	/* thus vpage 32 bytes long */
+
+enum { MAXIMUM_NUMBER_OF_STREAMS = 6, PERMANENT_STREAM_COUNT = 5 };
+
+/* Block limits extension VPD page (SBC-4) */
+static int inquiry_vpd_b7(unsigned char *arrb4)
+{
+	memset(arrb4, 0, SDEBUG_BLE_LEN_AFTER_B4);
+	arrb4[1] = 1; /* Reduced stream control support (RSCS) */
+	put_unaligned_be16(MAXIMUM_NUMBER_OF_STREAMS, &arrb4[2]);
+	return SDEBUG_BLE_LEN_AFTER_B4;
+}
+
 #define SDEBUG_LONG_INQ_SZ 96
 #define SDEBUG_MAX_INQ_ARR_SZ 584
 
@@ -1584,7 +1956,7 @@ static int resp_inquiry(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 	if (! arr)
 		return DID_REQUEUE << 16;
 	is_disk = (sdebug_ptype == TYPE_DISK);
-	is_zbc = (devip->zmodel != BLK_ZONED_NONE);
+	is_zbc = devip->zoned;
 	is_disk_zbc = (is_disk || is_zbc);
 	have_wlun = scsi_is_wlun(scp->device->lun);
 	if (have_wlun)
@@ -1603,7 +1975,8 @@ static int resp_inquiry(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 		u32 len;
 		char lu_id_str[6];
 		int host_no = devip->sdbg_host->shost->host_no;
-		
+
+		arr[1] = cmd[2];
 		port_group_id = (((host_no + 1) & 0x7f) << 8) +
 		    (devip->channel & 0x7f);
 		if (sdebug_vpd_use_hostno == 0)
@@ -1614,7 +1987,6 @@ static int resp_inquiry(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 				 (devip->target * 1000) - 3;
 		len = scnprintf(lu_id_str, 6, "%d", lu_id_num);
 		if (0 == cmd[2]) { /* supported vital product data pages */
-			arr[1] = cmd[2];	/*sanity */
 			n = 4;
 			arr[n++] = 0x0;   /* this page */
 			arr[n++] = 0x80;  /* unit serial number */
@@ -1632,26 +2004,22 @@ static int resp_inquiry(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 					arr[n++] = 0xb2;  /* LB Provisioning */
 				if (is_zbc)
 					arr[n++] = 0xb6;  /* ZB dev. char. */
+				arr[n++] = 0xb7;  /* Block limits extension */
 			}
 			arr[3] = n - 4;	  /* number of supported VPD pages */
 		} else if (0x80 == cmd[2]) { /* unit serial number */
-			arr[1] = cmd[2];	/*sanity */
 			arr[3] = len;
 			memcpy(&arr[4], lu_id_str, len);
 		} else if (0x83 == cmd[2]) { /* device identification */
-			arr[1] = cmd[2];	/*sanity */
 			arr[3] = inquiry_vpd_83(&arr[4], port_group_id,
 						target_dev_id, lu_id_num,
 						lu_id_str, len,
 						&devip->lu_name);
 		} else if (0x84 == cmd[2]) { /* Software interface ident. */
-			arr[1] = cmd[2];	/*sanity */
 			arr[3] = inquiry_vpd_84(&arr[4]);
 		} else if (0x85 == cmd[2]) { /* Management network addresses */
-			arr[1] = cmd[2];	/*sanity */
 			arr[3] = inquiry_vpd_85(&arr[4]);
 		} else if (0x86 == cmd[2]) { /* extended inquiry */
-			arr[1] = cmd[2];	/*sanity */
 			arr[3] = 0x3c;	/* number of following entries */
 			if (sdebug_dif == T10_PI_TYPE3_PROTECTION)
 				arr[4] = 0x4;	/* SPT: GRD_CHK:1 */
@@ -1659,33 +2027,32 @@ static int resp_inquiry(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 				arr[4] = 0x5;   /* SPT: GRD_CHK:1, REF_CHK:1 */
 			else
 				arr[4] = 0x0;   /* no protection stuff */
-			arr[5] = 0x7;   /* head of q, ordered + simple q's */
+			/*
+			 * GROUP_SUP=1; HEADSUP=1 (HEAD OF QUEUE); ORDSUP=1
+			 * (ORDERED queuing); SIMPSUP=1 (SIMPLE queuing).
+			 */
+			arr[5] = 0x17;
 		} else if (0x87 == cmd[2]) { /* mode page policy */
-			arr[1] = cmd[2];	/*sanity */
 			arr[3] = 0x8;	/* number of following entries */
 			arr[4] = 0x2;	/* disconnect-reconnect mp */
 			arr[6] = 0x80;	/* mlus, shared */
 			arr[8] = 0x18;	 /* protocol specific lu */
 			arr[10] = 0x82;	 /* mlus, per initiator port */
 		} else if (0x88 == cmd[2]) { /* SCSI Ports */
-			arr[1] = cmd[2];	/*sanity */
 			arr[3] = inquiry_vpd_88(&arr[4], target_dev_id);
 		} else if (is_disk_zbc && 0x89 == cmd[2]) { /* ATA info */
-			arr[1] = cmd[2];        /*sanity */
 			n = inquiry_vpd_89(&arr[4]);
 			put_unaligned_be16(n, arr + 2);
 		} else if (is_disk_zbc && 0xb0 == cmd[2]) { /* Block limits */
-			arr[1] = cmd[2];        /*sanity */
 			arr[3] = inquiry_vpd_b0(&arr[4]);
 		} else if (is_disk_zbc && 0xb1 == cmd[2]) { /* Block char. */
-			arr[1] = cmd[2];        /*sanity */
 			arr[3] = inquiry_vpd_b1(devip, &arr[4]);
 		} else if (is_disk && 0xb2 == cmd[2]) { /* LB Prov. */
-			arr[1] = cmd[2];        /*sanity */
 			arr[3] = inquiry_vpd_b2(&arr[4]);
 		} else if (is_zbc && cmd[2] == 0xb6) { /* ZB dev. charact. */
-			arr[1] = cmd[2];        /*sanity */
 			arr[3] = inquiry_vpd_b6(devip, &arr[4]);
+		} else if (cmd[2] == 0xb7) { /* block limits extension page */
+			arr[3] = inquiry_vpd_b7(&arr[4]);
 		} else {
 			mk_sense_invalid_fld(scp, SDEB_IN_CDB, 2, -1);
 			kfree(arr);
@@ -1896,7 +2263,7 @@ static int resp_readcap16(struct scsi_cmnd *scp,
 	 * Since the scsi_debug READ CAPACITY implementation always reports the
 	 * total disk capacity, set RC BASIS = 1 for host-managed ZBC devices.
 	 */
-	if (devip->zmodel == BLK_ZONED_HM)
+	if (devip->zoned)
 		arr[12] |= 1 << 4;
 
 	arr[15] = sdebug_lowest_aligned & 0xff;
@@ -2254,6 +2621,40 @@ static int resp_ctrl_m_pg(unsigned char *p, int pcontrol, int target)
 	return sizeof(ctrl_m_pg);
 }
 
+/* IO Advice Hints Grouping mode page */
+static int resp_grouping_m_pg(unsigned char *p, int pcontrol, int target)
+{
+	/* IO Advice Hints Grouping mode page */
+	struct grouping_m_pg {
+		u8 page_code;	/* OR 0x40 when subpage_code > 0 */
+		u8 subpage_code;
+		__be16 page_length;
+		u8 reserved[12];
+		struct scsi_io_group_descriptor descr[MAXIMUM_NUMBER_OF_STREAMS];
+	};
+	static const struct grouping_m_pg gr_m_pg = {
+		.page_code = 0xa | 0x40,
+		.subpage_code = 5,
+		.page_length = cpu_to_be16(sizeof(gr_m_pg) - 4),
+		.descr = {
+			{ .st_enble = 1 },
+			{ .st_enble = 1 },
+			{ .st_enble = 1 },
+			{ .st_enble = 1 },
+			{ .st_enble = 1 },
+			{ .st_enble = 0 },
+		}
+	};
+
+	BUILD_BUG_ON(sizeof(struct grouping_m_pg) !=
+		     16 + MAXIMUM_NUMBER_OF_STREAMS * 16);
+	memcpy(p, &gr_m_pg, sizeof(gr_m_pg));
+	if (1 == pcontrol) {
+		/* There are no changeable values so clear from byte 4 on. */
+		memset(p + 4, 0, sizeof(gr_m_pg) - 4);
+	}
+	return sizeof(gr_m_pg);
+}
 
 static int resp_iec_m_pg(unsigned char *p, int pcontrol, int target)
 {	/* Informational Exceptions control mode page for mode_sense */
@@ -2327,7 +2728,8 @@ static int resp_sas_sha_m_spg(unsigned char *p, int pcontrol)
 	return sizeof(sas_sha_m_pg);
 }
 
-#define SDEBUG_MAX_MSENSE_SZ 256
+/* PAGE_SIZE is more than necessary but provides room for future expansion. */
+#define SDEBUG_MAX_MSENSE_SZ PAGE_SIZE
 
 static int resp_mode_sense(struct scsi_cmnd *scp,
 			   struct sdebug_dev_info *devip)
@@ -2338,10 +2740,13 @@ static int resp_mode_sense(struct scsi_cmnd *scp,
 	int target_dev_id;
 	int target = scp->device->id;
 	unsigned char *ap;
-	unsigned char arr[SDEBUG_MAX_MSENSE_SZ];
+	unsigned char *arr __free(kfree);
 	unsigned char *cmd = scp->cmnd;
-	bool dbd, llbaa, msense_6, is_disk, is_zbc, bad_pcode;
+	bool dbd, llbaa, msense_6, is_disk, is_zbc;
 
+	arr = kzalloc(SDEBUG_MAX_MSENSE_SZ, GFP_ATOMIC);
+	if (!arr)
+		return -ENOMEM;
 	dbd = !!(cmd[1] & 0x8);		/* disable block descriptors */
 	pcontrol = (cmd[2] & 0xc0) >> 6;
 	pcode = cmd[2] & 0x3f;
@@ -2349,13 +2754,12 @@ static int resp_mode_sense(struct scsi_cmnd *scp,
 	msense_6 = (MODE_SENSE == cmd[0]);
 	llbaa = msense_6 ? false : !!(cmd[1] & 0x10);
 	is_disk = (sdebug_ptype == TYPE_DISK);
-	is_zbc = (devip->zmodel != BLK_ZONED_NONE);
+	is_zbc = devip->zoned;
 	if ((is_disk || is_zbc) && !dbd)
 		bd_len = llbaa ? 16 : 8;
 	else
 		bd_len = 0;
 	alloc_len = msense_6 ? cmd[4] : get_unaligned_be16(cmd + 7);
-	memset(arr, 0, SDEBUG_MAX_MSENSE_SZ);
 	if (0x3 == pcontrol) {  /* Saving values not supported */
 		mk_sense_buffer(scp, ILLEGAL_REQUEST, SAVING_PARAMS_UNSUP, 0);
 		return check_condition_result;
@@ -2399,45 +2803,63 @@ static int resp_mode_sense(struct scsi_cmnd *scp,
 		ap = arr + offset;
 	}
 
-	if ((subpcode > 0x0) && (subpcode < 0xff) && (0x19 != pcode)) {
-		/* TODO: Control Extension page */
-		mk_sense_invalid_fld(scp, SDEB_IN_CDB, 3, -1);
-		return check_condition_result;
-	}
-	bad_pcode = false;
-
+	/*
+	 * N.B. If len>0 before resp_*_pg() call, then form of that call should be:
+	 *        len += resp_*_pg(ap + len, pcontrol, target);
+	 */
 	switch (pcode) {
 	case 0x1:	/* Read-Write error recovery page, direct access */
+		if (subpcode > 0x0 && subpcode < 0xff)
+			goto bad_subpcode;
 		len = resp_err_recov_pg(ap, pcontrol, target);
 		offset += len;
 		break;
 	case 0x2:	/* Disconnect-Reconnect page, all devices */
+		if (subpcode > 0x0 && subpcode < 0xff)
+			goto bad_subpcode;
 		len = resp_disconnect_pg(ap, pcontrol, target);
 		offset += len;
 		break;
 	case 0x3:       /* Format device page, direct access */
+		if (subpcode > 0x0 && subpcode < 0xff)
+			goto bad_subpcode;
 		if (is_disk) {
 			len = resp_format_pg(ap, pcontrol, target);
 			offset += len;
-		} else
-			bad_pcode = true;
+		} else {
+			goto bad_pcode;
+		}
 		break;
 	case 0x8:	/* Caching page, direct access */
+		if (subpcode > 0x0 && subpcode < 0xff)
+			goto bad_subpcode;
 		if (is_disk || is_zbc) {
 			len = resp_caching_pg(ap, pcontrol, target);
 			offset += len;
-		} else
-			bad_pcode = true;
+		} else {
+			goto bad_pcode;
+		}
 		break;
 	case 0xa:	/* Control Mode page, all devices */
-		len = resp_ctrl_m_pg(ap, pcontrol, target);
+		switch (subpcode) {
+		case 0:
+			len = resp_ctrl_m_pg(ap, pcontrol, target);
+			break;
+		case 0x05:
+			len = resp_grouping_m_pg(ap, pcontrol, target);
+			break;
+		case 0xff:
+			len = resp_ctrl_m_pg(ap, pcontrol, target);
+			len += resp_grouping_m_pg(ap + len, pcontrol, target);
+			break;
+		default:
+			goto bad_subpcode;
+		}
 		offset += len;
 		break;
 	case 0x19:	/* if spc==1 then sas phy, control+discover */
-		if ((subpcode > 0x2) && (subpcode < 0xff)) {
-			mk_sense_invalid_fld(scp, SDEB_IN_CDB, 3, -1);
-			return check_condition_result;
-		}
+		if (subpcode > 0x2 && subpcode < 0xff)
+			goto bad_subpcode;
 		len = 0;
 		if ((0x0 == subpcode) || (0xff == subpcode))
 			len += resp_sas_sf_m_pg(ap + len, pcontrol, target);
@@ -2449,49 +2871,50 @@ static int resp_mode_sense(struct scsi_cmnd *scp,
 		offset += len;
 		break;
 	case 0x1c:	/* Informational Exceptions Mode page, all devices */
+		if (subpcode > 0x0 && subpcode < 0xff)
+			goto bad_subpcode;
 		len = resp_iec_m_pg(ap, pcontrol, target);
 		offset += len;
 		break;
 	case 0x3f:	/* Read all Mode pages */
-		if ((0 == subpcode) || (0xff == subpcode)) {
-			len = resp_err_recov_pg(ap, pcontrol, target);
-			len += resp_disconnect_pg(ap + len, pcontrol, target);
-			if (is_disk) {
-				len += resp_format_pg(ap + len, pcontrol,
-						      target);
-				len += resp_caching_pg(ap + len, pcontrol,
-						       target);
-			} else if (is_zbc) {
-				len += resp_caching_pg(ap + len, pcontrol,
-						       target);
-			}
-			len += resp_ctrl_m_pg(ap + len, pcontrol, target);
-			len += resp_sas_sf_m_pg(ap + len, pcontrol, target);
-			if (0xff == subpcode) {
-				len += resp_sas_pcd_m_spg(ap + len, pcontrol,
-						  target, target_dev_id);
-				len += resp_sas_sha_m_spg(ap + len, pcontrol);
-			}
-			len += resp_iec_m_pg(ap + len, pcontrol, target);
-			offset += len;
-		} else {
-			mk_sense_invalid_fld(scp, SDEB_IN_CDB, 3, -1);
-			return check_condition_result;
+		if (subpcode > 0x0 && subpcode < 0xff)
+			goto bad_subpcode;
+		len = resp_err_recov_pg(ap, pcontrol, target);
+		len += resp_disconnect_pg(ap + len, pcontrol, target);
+		if (is_disk) {
+			len += resp_format_pg(ap + len, pcontrol, target);
+			len += resp_caching_pg(ap + len, pcontrol, target);
+		} else if (is_zbc) {
+			len += resp_caching_pg(ap + len, pcontrol, target);
 		}
+		len += resp_ctrl_m_pg(ap + len, pcontrol, target);
+		if (0xff == subpcode)
+			len += resp_grouping_m_pg(ap + len, pcontrol, target);
+		len += resp_sas_sf_m_pg(ap + len, pcontrol, target);
+		if (0xff == subpcode) {
+			len += resp_sas_pcd_m_spg(ap + len, pcontrol, target,
+						  target_dev_id);
+			len += resp_sas_sha_m_spg(ap + len, pcontrol);
+		}
+		len += resp_iec_m_pg(ap + len, pcontrol, target);
+		offset += len;
 		break;
 	default:
-		bad_pcode = true;
-		break;
-	}
-	if (bad_pcode) {
-		mk_sense_invalid_fld(scp, SDEB_IN_CDB, 2, 5);
-		return check_condition_result;
+		goto bad_pcode;
 	}
 	if (msense_6)
 		arr[0] = offset - 1;
 	else
 		put_unaligned_be16((offset - 2), arr + 0);
 	return fill_from_dev_buffer(scp, arr, min_t(u32, alloc_len, offset));
+
+bad_pcode:
+	mk_sense_invalid_fld(scp, SDEB_IN_CDB, 2, 5);
+	return check_condition_result;
+
+bad_subpcode:
+	mk_sense_invalid_fld(scp, SDEB_IN_CDB, 3, -1);
+	return check_condition_result;
 }
 
 #define SDEBUG_MAX_MSELECT_SZ 512
@@ -2895,8 +3318,6 @@ static int check_zbc_access_params(struct scsi_cmnd *scp,
 	struct sdeb_zone_state *zsp_end = zbc_zone(devip, lba + num - 1);
 
 	if (!write) {
-		if (devip->zmodel == BLK_ZONED_HA)
-			return 0;
 		/* For host-managed, reads cannot cross zone types boundaries */
 		if (zsp->z_type != zsp_end->z_type) {
 			mk_sense_buffer(scp, ILLEGAL_REQUEST,
@@ -3006,15 +3427,238 @@ static inline struct sdeb_store_info *devip2sip(struct sdebug_dev_info *devip,
 	return xa_load(per_store_ap, devip->sdbg_host->si_idx);
 }
 
+static inline void
+sdeb_read_lock(rwlock_t *lock)
+{
+	if (sdebug_no_rwlock)
+		__acquire(lock);
+	else
+		read_lock(lock);
+}
+
+static inline void
+sdeb_read_unlock(rwlock_t *lock)
+{
+	if (sdebug_no_rwlock)
+		__release(lock);
+	else
+		read_unlock(lock);
+}
+
+static inline void
+sdeb_write_lock(rwlock_t *lock)
+{
+	if (sdebug_no_rwlock)
+		__acquire(lock);
+	else
+		write_lock(lock);
+}
+
+static inline void
+sdeb_write_unlock(rwlock_t *lock)
+{
+	if (sdebug_no_rwlock)
+		__release(lock);
+	else
+		write_unlock(lock);
+}
+
+static inline void
+sdeb_data_read_lock(struct sdeb_store_info *sip)
+{
+	BUG_ON(!sip);
+
+	sdeb_read_lock(&sip->macc_data_lck);
+}
+
+static inline void
+sdeb_data_read_unlock(struct sdeb_store_info *sip)
+{
+	BUG_ON(!sip);
+
+	sdeb_read_unlock(&sip->macc_data_lck);
+}
+
+static inline void
+sdeb_data_write_lock(struct sdeb_store_info *sip)
+{
+	BUG_ON(!sip);
+
+	sdeb_write_lock(&sip->macc_data_lck);
+}
+
+static inline void
+sdeb_data_write_unlock(struct sdeb_store_info *sip)
+{
+	BUG_ON(!sip);
+
+	sdeb_write_unlock(&sip->macc_data_lck);
+}
+
+static inline void
+sdeb_data_sector_read_lock(struct sdeb_store_info *sip)
+{
+	BUG_ON(!sip);
+
+	sdeb_read_lock(&sip->macc_sector_lck);
+}
+
+static inline void
+sdeb_data_sector_read_unlock(struct sdeb_store_info *sip)
+{
+	BUG_ON(!sip);
+
+	sdeb_read_unlock(&sip->macc_sector_lck);
+}
+
+static inline void
+sdeb_data_sector_write_lock(struct sdeb_store_info *sip)
+{
+	BUG_ON(!sip);
+
+	sdeb_write_lock(&sip->macc_sector_lck);
+}
+
+static inline void
+sdeb_data_sector_write_unlock(struct sdeb_store_info *sip)
+{
+	BUG_ON(!sip);
+
+	sdeb_write_unlock(&sip->macc_sector_lck);
+}
+
+/*
+ * Atomic locking:
+ * We simplify the atomic model to allow only 1x atomic write and many non-
+ * atomic reads or writes for all LBAs.
+
+ * A RW lock has a similar bahaviour:
+ * Only 1x writer and many readers.
+
+ * So use a RW lock for per-device read and write locking:
+ * An atomic access grabs the lock as a writer and non-atomic grabs the lock
+ * as a reader.
+ */
+
+static inline void
+sdeb_data_lock(struct sdeb_store_info *sip, bool atomic)
+{
+	if (atomic)
+		sdeb_data_write_lock(sip);
+	else
+		sdeb_data_read_lock(sip);
+}
+
+static inline void
+sdeb_data_unlock(struct sdeb_store_info *sip, bool atomic)
+{
+	if (atomic)
+		sdeb_data_write_unlock(sip);
+	else
+		sdeb_data_read_unlock(sip);
+}
+
+/* Allow many reads but only 1x write per sector */
+static inline void
+sdeb_data_sector_lock(struct sdeb_store_info *sip, bool do_write)
+{
+	if (do_write)
+		sdeb_data_sector_write_lock(sip);
+	else
+		sdeb_data_sector_read_lock(sip);
+}
+
+static inline void
+sdeb_data_sector_unlock(struct sdeb_store_info *sip, bool do_write)
+{
+	if (do_write)
+		sdeb_data_sector_write_unlock(sip);
+	else
+		sdeb_data_sector_read_unlock(sip);
+}
+
+static inline void
+sdeb_meta_read_lock(struct sdeb_store_info *sip)
+{
+	if (sdebug_no_rwlock) {
+		if (sip)
+			__acquire(&sip->macc_meta_lck);
+		else
+			__acquire(&sdeb_fake_rw_lck);
+	} else {
+		if (sip)
+			read_lock(&sip->macc_meta_lck);
+		else
+			read_lock(&sdeb_fake_rw_lck);
+	}
+}
+
+static inline void
+sdeb_meta_read_unlock(struct sdeb_store_info *sip)
+{
+	if (sdebug_no_rwlock) {
+		if (sip)
+			__release(&sip->macc_meta_lck);
+		else
+			__release(&sdeb_fake_rw_lck);
+	} else {
+		if (sip)
+			read_unlock(&sip->macc_meta_lck);
+		else
+			read_unlock(&sdeb_fake_rw_lck);
+	}
+}
+
+static inline void
+sdeb_meta_write_lock(struct sdeb_store_info *sip)
+{
+	if (sdebug_no_rwlock) {
+		if (sip)
+			__acquire(&sip->macc_meta_lck);
+		else
+			__acquire(&sdeb_fake_rw_lck);
+	} else {
+		if (sip)
+			write_lock(&sip->macc_meta_lck);
+		else
+			write_lock(&sdeb_fake_rw_lck);
+	}
+}
+
+static inline void
+sdeb_meta_write_unlock(struct sdeb_store_info *sip)
+{
+	if (sdebug_no_rwlock) {
+		if (sip)
+			__release(&sip->macc_meta_lck);
+		else
+			__release(&sdeb_fake_rw_lck);
+	} else {
+		if (sip)
+			write_unlock(&sip->macc_meta_lck);
+		else
+			write_unlock(&sdeb_fake_rw_lck);
+	}
+}
+
 /* Returns number of bytes copied or -1 if error. */
 static int do_device_access(struct sdeb_store_info *sip, struct scsi_cmnd *scp,
-			    u32 sg_skip, u64 lba, u32 num, bool do_write)
+			    u32 sg_skip, u64 lba, u32 num, u8 group_number,
+			    bool do_write, bool atomic)
 {
 	int ret;
-	u64 block, rest = 0;
+	u64 block;
 	enum dma_data_direction dir;
 	struct scsi_data_buffer *sdb = &scp->sdb;
 	u8 *fsp;
+	int i, total = 0;
+
+	/*
+	 * Even though reads are inherently atomic (in this driver), we expect
+	 * the atomic flag only for writes.
+	 */
+	if (!do_write && atomic)
+		return -1;
 
 	if (do_write) {
 		dir = DMA_TO_DEVICE;
@@ -3027,26 +3671,33 @@ static int do_device_access(struct sdeb_store_info *sip, struct scsi_cmnd *scp,
 		return 0;
 	if (scp->sc_data_direction != dir)
 		return -1;
+
+	if (do_write && group_number < ARRAY_SIZE(writes_by_group_number))
+		atomic_long_inc(&writes_by_group_number[group_number]);
+
 	fsp = sip->storep;
 
 	block = do_div(lba, sdebug_store_sectors);
-	if (block + num > sdebug_store_sectors)
-		rest = block + num - sdebug_store_sectors;
 
-	ret = sg_copy_buffer(sdb->table.sgl, sdb->table.nents,
+	/* Only allow 1x atomic write or multiple non-atomic writes at any given time */
+	sdeb_data_lock(sip, atomic);
+	for (i = 0; i < num; i++) {
+		/* We shouldn't need to lock for atomic writes, but do it anyway */
+		sdeb_data_sector_lock(sip, do_write);
+		ret = sg_copy_buffer(sdb->table.sgl, sdb->table.nents,
 		   fsp + (block * sdebug_sector_size),
-		   (num - rest) * sdebug_sector_size, sg_skip, do_write);
-	if (ret != (num - rest) * sdebug_sector_size)
-		return ret;
-
-	if (rest) {
-		ret += sg_copy_buffer(sdb->table.sgl, sdb->table.nents,
-			    fsp, rest * sdebug_sector_size,
-			    sg_skip + ((num - rest) * sdebug_sector_size),
-			    do_write);
+		   sdebug_sector_size, sg_skip, do_write);
+		sdeb_data_sector_unlock(sip, do_write);
+		total += ret;
+		if (ret != sdebug_sector_size)
+			break;
+		sg_skip += sdebug_sector_size;
+		if (++block >= sdebug_store_sectors)
+			block = 0;
 	}
+	sdeb_data_unlock(sip, atomic);
 
-	return ret;
+	return total;
 }
 
 /* Returns number of bytes copied or -1 if error. */
@@ -3220,70 +3871,6 @@ static int prot_verify_read(struct scsi_cmnd *scp, sector_t start_sec,
 	return ret;
 }
 
-static inline void
-sdeb_read_lock(struct sdeb_store_info *sip)
-{
-	if (sdebug_no_rwlock) {
-		if (sip)
-			__acquire(&sip->macc_lck);
-		else
-			__acquire(&sdeb_fake_rw_lck);
-	} else {
-		if (sip)
-			read_lock(&sip->macc_lck);
-		else
-			read_lock(&sdeb_fake_rw_lck);
-	}
-}
-
-static inline void
-sdeb_read_unlock(struct sdeb_store_info *sip)
-{
-	if (sdebug_no_rwlock) {
-		if (sip)
-			__release(&sip->macc_lck);
-		else
-			__release(&sdeb_fake_rw_lck);
-	} else {
-		if (sip)
-			read_unlock(&sip->macc_lck);
-		else
-			read_unlock(&sdeb_fake_rw_lck);
-	}
-}
-
-static inline void
-sdeb_write_lock(struct sdeb_store_info *sip)
-{
-	if (sdebug_no_rwlock) {
-		if (sip)
-			__acquire(&sip->macc_lck);
-		else
-			__acquire(&sdeb_fake_rw_lck);
-	} else {
-		if (sip)
-			write_lock(&sip->macc_lck);
-		else
-			write_lock(&sdeb_fake_rw_lck);
-	}
-}
-
-static inline void
-sdeb_write_unlock(struct sdeb_store_info *sip)
-{
-	if (sdebug_no_rwlock) {
-		if (sip)
-			__release(&sip->macc_lck);
-		else
-			__release(&sdeb_fake_rw_lck);
-	} else {
-		if (sip)
-			write_unlock(&sip->macc_lck);
-		else
-			write_unlock(&sdeb_fake_rw_lck);
-	}
-}
-
 static int resp_read_dt0(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 {
 	bool check_prot;
@@ -3293,6 +3880,7 @@ static int resp_read_dt0(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 	u64 lba;
 	struct sdeb_store_info *sip = devip2sip(devip, true);
 	u8 *cmd = scp->cmnd;
+	bool meta_data_locked = false;
 
 	switch (cmd[0]) {
 	case READ_16:
@@ -3351,6 +3939,10 @@ static int resp_read_dt0(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 		atomic_set(&sdeb_inject_pending, 0);
 	}
 
+	/*
+	 * When checking device access params, for reads we only check data
+	 * versus what is set at init time, so no need to lock.
+	 */
 	ret = check_device_access_params(scp, lba, num, false);
 	if (ret)
 		return ret;
@@ -3370,29 +3962,33 @@ static int resp_read_dt0(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 		return check_condition_result;
 	}
 
-	sdeb_read_lock(sip);
+	if (sdebug_dev_is_zoned(devip) ||
+	    (sdebug_dix && scsi_prot_sg_count(scp)))  {
+		sdeb_meta_read_lock(sip);
+		meta_data_locked = true;
+	}
 
 	/* DIX + T10 DIF */
 	if (unlikely(sdebug_dix && scsi_prot_sg_count(scp))) {
 		switch (prot_verify_read(scp, lba, num, ei_lba)) {
 		case 1: /* Guard tag error */
 			if (cmd[1] >> 5 != 3) { /* RDPROTECT != 3 */
-				sdeb_read_unlock(sip);
+				sdeb_meta_read_unlock(sip);
 				mk_sense_buffer(scp, ABORTED_COMMAND, 0x10, 1);
 				return check_condition_result;
 			} else if (scp->prot_flags & SCSI_PROT_GUARD_CHECK) {
-				sdeb_read_unlock(sip);
+				sdeb_meta_read_unlock(sip);
 				mk_sense_buffer(scp, ILLEGAL_REQUEST, 0x10, 1);
 				return illegal_condition_result;
 			}
 			break;
 		case 3: /* Reference tag error */
 			if (cmd[1] >> 5 != 3) { /* RDPROTECT != 3 */
-				sdeb_read_unlock(sip);
+				sdeb_meta_read_unlock(sip);
 				mk_sense_buffer(scp, ABORTED_COMMAND, 0x10, 3);
 				return check_condition_result;
 			} else if (scp->prot_flags & SCSI_PROT_REF_CHECK) {
-				sdeb_read_unlock(sip);
+				sdeb_meta_read_unlock(sip);
 				mk_sense_buffer(scp, ILLEGAL_REQUEST, 0x10, 3);
 				return illegal_condition_result;
 			}
@@ -3400,8 +3996,9 @@ static int resp_read_dt0(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 		}
 	}
 
-	ret = do_device_access(sip, scp, 0, lba, num, false);
-	sdeb_read_unlock(sip);
+	ret = do_device_access(sip, scp, 0, lba, num, 0, false, false);
+	if (meta_data_locked)
+		sdeb_meta_read_unlock(sip);
 	if (unlikely(ret == -1))
 		return DID_ERROR << 16;
 
@@ -3585,22 +4182,26 @@ static int resp_write_dt0(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 {
 	bool check_prot;
 	u32 num;
+	u8 group = 0;
 	u32 ei_lba;
 	int ret;
 	u64 lba;
 	struct sdeb_store_info *sip = devip2sip(devip, true);
 	u8 *cmd = scp->cmnd;
+	bool meta_data_locked = false;
 
 	switch (cmd[0]) {
 	case WRITE_16:
 		ei_lba = 0;
 		lba = get_unaligned_be64(cmd + 2);
 		num = get_unaligned_be32(cmd + 10);
+		group = cmd[14] & 0x3f;
 		check_prot = true;
 		break;
 	case WRITE_10:
 		ei_lba = 0;
 		lba = get_unaligned_be32(cmd + 2);
+		group = cmd[6] & 0x3f;
 		num = get_unaligned_be16(cmd + 7);
 		check_prot = true;
 		break;
@@ -3615,15 +4216,18 @@ static int resp_write_dt0(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 		ei_lba = 0;
 		lba = get_unaligned_be32(cmd + 2);
 		num = get_unaligned_be32(cmd + 6);
+		group = cmd[6] & 0x3f;
 		check_prot = true;
 		break;
 	case 0x53:	/* XDWRITEREAD(10) */
 		ei_lba = 0;
 		lba = get_unaligned_be32(cmd + 2);
+		group = cmd[6] & 0x1f;
 		num = get_unaligned_be16(cmd + 7);
 		check_prot = false;
 		break;
 	default:	/* assume WRITE(32) */
+		group = cmd[6] & 0x3f;
 		lba = get_unaligned_be64(cmd + 12);
 		ei_lba = get_unaligned_be32(cmd + 20);
 		num = get_unaligned_be32(cmd + 28);
@@ -3643,10 +4247,17 @@ static int resp_write_dt0(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 				    "to DIF device\n");
 	}
 
-	sdeb_write_lock(sip);
+	if (sdebug_dev_is_zoned(devip) ||
+	    (sdebug_dix && scsi_prot_sg_count(scp)) ||
+	    scsi_debug_lbp())  {
+		sdeb_meta_write_lock(sip);
+		meta_data_locked = true;
+	}
+
 	ret = check_device_access_params(scp, lba, num, true);
 	if (ret) {
-		sdeb_write_unlock(sip);
+		if (meta_data_locked)
+			sdeb_meta_write_unlock(sip);
 		return ret;
 	}
 
@@ -3655,22 +4266,22 @@ static int resp_write_dt0(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 		switch (prot_verify_write(scp, lba, num, ei_lba)) {
 		case 1: /* Guard tag error */
 			if (scp->prot_flags & SCSI_PROT_GUARD_CHECK) {
-				sdeb_write_unlock(sip);
+				sdeb_meta_write_unlock(sip);
 				mk_sense_buffer(scp, ILLEGAL_REQUEST, 0x10, 1);
 				return illegal_condition_result;
 			} else if (scp->cmnd[1] >> 5 != 3) { /* WRPROTECT != 3 */
-				sdeb_write_unlock(sip);
+				sdeb_meta_write_unlock(sip);
 				mk_sense_buffer(scp, ABORTED_COMMAND, 0x10, 1);
 				return check_condition_result;
 			}
 			break;
 		case 3: /* Reference tag error */
 			if (scp->prot_flags & SCSI_PROT_REF_CHECK) {
-				sdeb_write_unlock(sip);
+				sdeb_meta_write_unlock(sip);
 				mk_sense_buffer(scp, ILLEGAL_REQUEST, 0x10, 3);
 				return illegal_condition_result;
 			} else if (scp->cmnd[1] >> 5 != 3) { /* WRPROTECT != 3 */
-				sdeb_write_unlock(sip);
+				sdeb_meta_write_unlock(sip);
 				mk_sense_buffer(scp, ABORTED_COMMAND, 0x10, 3);
 				return check_condition_result;
 			}
@@ -3678,13 +4289,16 @@ static int resp_write_dt0(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 		}
 	}
 
-	ret = do_device_access(sip, scp, 0, lba, num, true);
+	ret = do_device_access(sip, scp, 0, lba, num, group, true, false);
 	if (unlikely(scsi_debug_lbp()))
 		map_region(sip, lba, num);
+
 	/* If ZBC zone then bump its write pointer */
 	if (sdebug_dev_is_zoned(devip))
 		zbc_inc_wp(devip, lba, num);
-	sdeb_write_unlock(sip);
+	if (meta_data_locked)
+		sdeb_meta_write_unlock(sip);
+
 	if (unlikely(-1 == ret))
 		return DID_ERROR << 16;
 	else if (unlikely(sdebug_verbose &&
@@ -3730,12 +4344,14 @@ static int resp_write_scat(struct scsi_cmnd *scp,
 	u32 lb_size = sdebug_sector_size;
 	u32 ei_lba;
 	u64 lba;
+	u8 group;
 	int ret, res;
 	bool is_16;
 	static const u32 lrd_size = 32; /* + parameter list header size */
 
 	if (cmd[0] == VARIABLE_LENGTH_CMD) {
 		is_16 = false;
+		group = cmd[6] & 0x3f;
 		wrprotect = (cmd[10] >> 5) & 0x7;
 		lbdof = get_unaligned_be16(cmd + 12);
 		num_lrd = get_unaligned_be16(cmd + 16);
@@ -3746,6 +4362,7 @@ static int resp_write_scat(struct scsi_cmnd *scp,
 		lbdof = get_unaligned_be16(cmd + 4);
 		num_lrd = get_unaligned_be16(cmd + 8);
 		bt_len = get_unaligned_be32(cmd + 10);
+		group = cmd[14] & 0x3f;
 		if (unlikely(have_dif_prot)) {
 			if (sdebug_dif == T10_PI_TYPE2_PROTECTION &&
 			    wrprotect) {
@@ -3791,7 +4408,8 @@ static int resp_write_scat(struct scsi_cmnd *scp,
 		goto err_out;
 	}
 
-	sdeb_write_lock(sip);
+	/* Just keep it simple and always lock for now */
+	sdeb_meta_write_lock(sip);
 	sg_off = lbdof_blen;
 	/* Spec says Buffer xfer Length field in number of LBs in dout */
 	cum_lb = 0;
@@ -3834,7 +4452,11 @@ static int resp_write_scat(struct scsi_cmnd *scp,
 			}
 		}
 
-		ret = do_device_access(sip, scp, sg_off, lba, num, true);
+		/*
+		 * Write ranges atomically to keep as close to pre-atomic
+		 * writes behaviour as possible.
+		 */
+		ret = do_device_access(sip, scp, sg_off, lba, num, group, true, true);
 		/* If ZBC zone then bump its write pointer */
 		if (sdebug_dev_is_zoned(devip))
 			zbc_inc_wp(devip, lba, num);
@@ -3873,7 +4495,7 @@ static int resp_write_scat(struct scsi_cmnd *scp,
 	}
 	ret = 0;
 err_out_unlock:
-	sdeb_write_unlock(sip);
+	sdeb_meta_write_unlock(sip);
 err_out:
 	kfree(lrdp);
 	return ret;
@@ -3892,14 +4514,16 @@ static int resp_write_same(struct scsi_cmnd *scp, u64 lba, u32 num,
 						scp->device->hostdata, true);
 	u8 *fs1p;
 	u8 *fsp;
+	bool meta_data_locked = false;
 
-	sdeb_write_lock(sip);
+	if (sdebug_dev_is_zoned(devip) || scsi_debug_lbp()) {
+		sdeb_meta_write_lock(sip);
+		meta_data_locked = true;
+	}
 
 	ret = check_device_access_params(scp, lba, num, true);
-	if (ret) {
-		sdeb_write_unlock(sip);
-		return ret;
-	}
+	if (ret)
+		goto out;
 
 	if (unmap && scsi_debug_lbp()) {
 		unmap_region(sip, lba, num);
@@ -3910,6 +4534,7 @@ static int resp_write_same(struct scsi_cmnd *scp, u64 lba, u32 num,
 	/* if ndob then zero 1 logical block, else fetch 1 logical block */
 	fsp = sip->storep;
 	fs1p = fsp + (block * lb_size);
+	sdeb_data_write_lock(sip);
 	if (ndob) {
 		memset(fs1p, 0, lb_size);
 		ret = 0;
@@ -3917,8 +4542,8 @@ static int resp_write_same(struct scsi_cmnd *scp, u64 lba, u32 num,
 		ret = fetch_to_dev_buffer(scp, fs1p, lb_size);
 
 	if (-1 == ret) {
-		sdeb_write_unlock(sip);
-		return DID_ERROR << 16;
+		ret = DID_ERROR << 16;
+		goto out;
 	} else if (sdebug_verbose && !ndob && (ret < lb_size))
 		sdev_printk(KERN_INFO, scp->device,
 			    "%s: %s: lb size=%u, IO sent=%d bytes\n",
@@ -3935,10 +4560,12 @@ static int resp_write_same(struct scsi_cmnd *scp, u64 lba, u32 num,
 	/* If ZBC zone then bump its write pointer */
 	if (sdebug_dev_is_zoned(devip))
 		zbc_inc_wp(devip, lba, num);
+	sdeb_data_write_unlock(sip);
+	ret = 0;
 out:
-	sdeb_write_unlock(sip);
-
-	return 0;
+	if (meta_data_locked)
+		sdeb_meta_write_unlock(sip);
+	return ret;
 }
 
 static int resp_write_same_10(struct scsi_cmnd *scp,
@@ -4081,25 +4708,30 @@ static int resp_comp_write(struct scsi_cmnd *scp,
 		return check_condition_result;
 	}
 
-	sdeb_write_lock(sip);
-
 	ret = do_dout_fetch(scp, dnum, arr);
 	if (ret == -1) {
 		retval = DID_ERROR << 16;
-		goto cleanup;
+		goto cleanup_free;
 	} else if (sdebug_verbose && (ret < (dnum * lb_size)))
 		sdev_printk(KERN_INFO, scp->device, "%s: compare_write: cdb "
 			    "indicated=%u, IO sent=%d bytes\n", my_name,
 			    dnum * lb_size, ret);
+
+	sdeb_data_write_lock(sip);
+	sdeb_meta_write_lock(sip);
 	if (!comp_write_worker(sip, lba, num, arr, false)) {
 		mk_sense_buffer(scp, MISCOMPARE, MISCOMPARE_VERIFY_ASC, 0);
 		retval = check_condition_result;
-		goto cleanup;
+		goto cleanup_unlock;
 	}
+
+	/* Cover sip->map_storep (which map_region()) sets with data lock */
 	if (scsi_debug_lbp())
 		map_region(sip, lba, num);
-cleanup:
-	sdeb_write_unlock(sip);
+cleanup_unlock:
+	sdeb_meta_write_unlock(sip);
+	sdeb_data_write_unlock(sip);
+cleanup_free:
 	kfree(arr);
 	return retval;
 }
@@ -4143,7 +4775,7 @@ static int resp_unmap(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 
 	desc = (void *)&buf[8];
 
-	sdeb_write_lock(sip);
+	sdeb_meta_write_lock(sip);
 
 	for (i = 0 ; i < descriptors ; i++) {
 		unsigned long long lba = get_unaligned_be64(&desc[i].lba);
@@ -4159,7 +4791,7 @@ static int resp_unmap(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 	ret = 0;
 
 out:
-	sdeb_write_unlock(sip);
+	sdeb_meta_write_unlock(sip);
 	kfree(buf);
 
 	return ret;
@@ -4207,6 +4839,51 @@ static int resp_get_lba_status(struct scsi_cmnd *scp,
 	arr[20] = !mapped;		/* prov_stat=0: mapped; 1: dealloc */
 
 	return fill_from_dev_buffer(scp, arr, SDEBUG_GET_LBA_STATUS_LEN);
+}
+
+static int resp_get_stream_status(struct scsi_cmnd *scp,
+				  struct sdebug_dev_info *devip)
+{
+	u16 starting_stream_id, stream_id;
+	const u8 *cmd = scp->cmnd;
+	u32 alloc_len, offset;
+	u8 arr[256] = {};
+	struct scsi_stream_status_header *h = (void *)arr;
+
+	starting_stream_id = get_unaligned_be16(cmd + 4);
+	alloc_len = get_unaligned_be32(cmd + 10);
+
+	if (alloc_len < 8) {
+		mk_sense_invalid_fld(scp, SDEB_IN_CDB, 10, -1);
+		return check_condition_result;
+	}
+
+	if (starting_stream_id >= MAXIMUM_NUMBER_OF_STREAMS) {
+		mk_sense_invalid_fld(scp, SDEB_IN_CDB, 4, -1);
+		return check_condition_result;
+	}
+
+	/*
+	 * The GET STREAM STATUS command only reports status information
+	 * about open streams. Treat the non-permanent stream as open.
+	 */
+	put_unaligned_be16(MAXIMUM_NUMBER_OF_STREAMS,
+			   &h->number_of_open_streams);
+
+	for (offset = 8, stream_id = starting_stream_id;
+	     offset + 8 <= min_t(u32, alloc_len, sizeof(arr)) &&
+		     stream_id < MAXIMUM_NUMBER_OF_STREAMS;
+	     offset += 8, stream_id++) {
+		struct scsi_stream_status *stream_status = (void *)arr + offset;
+
+		stream_status->perm = stream_id < PERMANENT_STREAM_COUNT;
+		put_unaligned_be16(stream_id,
+				   &stream_status->stream_identifier);
+		stream_status->rel_lifetime = stream_id + 1;
+	}
+	put_unaligned_be32(offset - 8, &h->len); /* PARAMETER DATA LENGTH */
+
+	return fill_from_dev_buffer(scp, arr, min(offset, alloc_len));
 }
 
 static int resp_sync_cache(struct scsi_cmnd *scp,
@@ -4272,12 +4949,13 @@ static int resp_pre_fetch(struct scsi_cmnd *scp,
 		rest = block + nblks - sdebug_store_sectors;
 
 	/* Try to bring the PRE-FETCH range into CPU's cache */
-	sdeb_read_lock(sip);
+	sdeb_data_read_lock(sip);
 	prefetch_range(fsp + (sdebug_sector_size * block),
 		       (nblks - rest) * sdebug_sector_size);
 	if (rest)
 		prefetch_range(fsp, rest * sdebug_sector_size);
-	sdeb_read_unlock(sip);
+
+	sdeb_data_read_unlock(sip);
 fini:
 	if (cmd[1] & 0x2)
 		res = SDEG_RES_IMMED_MASK;
@@ -4436,7 +5114,7 @@ static int resp_verify(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 		return check_condition_result;
 	}
 	/* Not changing store, so only need read access */
-	sdeb_read_lock(sip);
+	sdeb_data_read_lock(sip);
 
 	ret = do_dout_fetch(scp, a_num, arr);
 	if (ret == -1) {
@@ -4458,7 +5136,7 @@ static int resp_verify(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 		goto cleanup;
 	}
 cleanup:
-	sdeb_read_unlock(sip);
+	sdeb_data_read_unlock(sip);
 	kfree(arr);
 	return ret;
 }
@@ -4504,7 +5182,7 @@ static int resp_report_zones(struct scsi_cmnd *scp,
 		return check_condition_result;
 	}
 
-	sdeb_read_lock(sip);
+	sdeb_meta_read_lock(sip);
 
 	desc = arr + 64;
 	for (lba = zs_lba; lba < sdebug_capacity;
@@ -4602,9 +5280,68 @@ static int resp_report_zones(struct scsi_cmnd *scp,
 	ret = fill_from_dev_buffer(scp, arr, min_t(u32, alloc_len, rep_len));
 
 fini:
-	sdeb_read_unlock(sip);
+	sdeb_meta_read_unlock(sip);
 	kfree(arr);
 	return ret;
+}
+
+static int resp_atomic_write(struct scsi_cmnd *scp,
+			     struct sdebug_dev_info *devip)
+{
+	struct sdeb_store_info *sip;
+	u8 *cmd = scp->cmnd;
+	u16 boundary, len;
+	u64 lba, lba_tmp;
+	int ret;
+
+	if (!scsi_debug_atomic_write()) {
+		mk_sense_invalid_opcode(scp);
+		return check_condition_result;
+	}
+
+	sip = devip2sip(devip, true);
+
+	lba = get_unaligned_be64(cmd + 2);
+	boundary = get_unaligned_be16(cmd + 10);
+	len = get_unaligned_be16(cmd + 12);
+
+	lba_tmp = lba;
+	if (sdebug_atomic_wr_align &&
+	    do_div(lba_tmp, sdebug_atomic_wr_align)) {
+		/* Does not meet alignment requirement */
+		mk_sense_buffer(scp, ILLEGAL_REQUEST, INVALID_FIELD_IN_CDB, 0);
+		return check_condition_result;
+	}
+
+	if (sdebug_atomic_wr_gran && len % sdebug_atomic_wr_gran) {
+		/* Does not meet alignment requirement */
+		mk_sense_buffer(scp, ILLEGAL_REQUEST, INVALID_FIELD_IN_CDB, 0);
+		return check_condition_result;
+	}
+
+	if (boundary > 0) {
+		if (boundary > sdebug_atomic_wr_max_bndry) {
+			mk_sense_invalid_fld(scp, SDEB_IN_CDB, 12, -1);
+			return check_condition_result;
+		}
+
+		if (len > sdebug_atomic_wr_max_length_bndry) {
+			mk_sense_invalid_fld(scp, SDEB_IN_CDB, 12, -1);
+			return check_condition_result;
+		}
+	} else {
+		if (len > sdebug_atomic_wr_max_length) {
+			mk_sense_invalid_fld(scp, SDEB_IN_CDB, 12, -1);
+			return check_condition_result;
+		}
+	}
+
+	ret = do_device_access(sip, scp, 0, lba, len, 0, true, true);
+	if (unlikely(ret == -1))
+		return DID_ERROR << 16;
+	if (unlikely(ret != len * sdebug_sector_size))
+		return DID_ERROR << 16;
+	return 0;
 }
 
 /* Logic transplanted from tcmu-runner, file_zbc.c */
@@ -4633,8 +5370,7 @@ static int resp_open_zone(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 		mk_sense_invalid_opcode(scp);
 		return check_condition_result;
 	}
-
-	sdeb_write_lock(sip);
+	sdeb_meta_write_lock(sip);
 
 	if (all) {
 		/* Check if all closed zones can be open */
@@ -4683,7 +5419,7 @@ static int resp_open_zone(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 
 	zbc_open_zone(devip, zsp, true);
 fini:
-	sdeb_write_unlock(sip);
+	sdeb_meta_write_unlock(sip);
 	return res;
 }
 
@@ -4710,7 +5446,7 @@ static int resp_close_zone(struct scsi_cmnd *scp,
 		return check_condition_result;
 	}
 
-	sdeb_write_lock(sip);
+	sdeb_meta_write_lock(sip);
 
 	if (all) {
 		zbc_close_all(devip);
@@ -4739,7 +5475,7 @@ static int resp_close_zone(struct scsi_cmnd *scp,
 
 	zbc_close_zone(devip, zsp);
 fini:
-	sdeb_write_unlock(sip);
+	sdeb_meta_write_unlock(sip);
 	return res;
 }
 
@@ -4782,7 +5518,7 @@ static int resp_finish_zone(struct scsi_cmnd *scp,
 		return check_condition_result;
 	}
 
-	sdeb_write_lock(sip);
+	sdeb_meta_write_lock(sip);
 
 	if (all) {
 		zbc_finish_all(devip);
@@ -4811,7 +5547,7 @@ static int resp_finish_zone(struct scsi_cmnd *scp,
 
 	zbc_finish_zone(devip, zsp, true);
 fini:
-	sdeb_write_unlock(sip);
+	sdeb_meta_write_unlock(sip);
 	return res;
 }
 
@@ -4862,7 +5598,7 @@ static int resp_rwp_zone(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 		return check_condition_result;
 	}
 
-	sdeb_write_lock(sip);
+	sdeb_meta_write_lock(sip);
 
 	if (all) {
 		zbc_rwp_all(devip);
@@ -4890,7 +5626,7 @@ static int resp_rwp_zone(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
 
 	zbc_rwp_zone(devip, zsp);
 fini:
-	sdeb_write_unlock(sip);
+	sdeb_meta_write_unlock(sip);
 	return res;
 }
 
@@ -5023,7 +5759,7 @@ static int sdebug_device_create_zones(struct sdebug_dev_info *devip)
 	if (devip->zcap < devip->zsize)
 		devip->nr_zones += devip->nr_seq_zones;
 
-	if (devip->zmodel == BLK_ZONED_HM) {
+	if (devip->zoned) {
 		/* zbc_max_open_zones can be 0, meaning "not reported" */
 		if (sdeb_zbc_max_open >= devip->nr_zones - 1)
 			devip->max_open = (devip->nr_zones - 1) / 2;
@@ -5048,7 +5784,7 @@ static int sdebug_device_create_zones(struct sdebug_dev_info *devip)
 			zsp->z_size =
 				min_t(u64, devip->zsize, capacity - zstart);
 		} else if ((zstart & (devip->zsize - 1)) == 0) {
-			if (devip->zmodel == BLK_ZONED_HM)
+			if (devip->zoned)
 				zsp->z_type = ZBC_ZTYPE_SWR;
 			else
 				zsp->z_type = ZBC_ZTYPE_SWP;
@@ -5091,16 +5827,18 @@ static struct sdebug_dev_info *sdebug_device_create(
 		}
 		devip->sdbg_host = sdbg_host;
 		if (sdeb_zbc_in_use) {
-			devip->zmodel = sdeb_zbc_model;
+			devip->zoned = sdeb_zbc_model == BLK_ZONED_HM;
 			if (sdebug_device_create_zones(devip)) {
 				kfree(devip);
 				return NULL;
 			}
 		} else {
-			devip->zmodel = BLK_ZONED_NONE;
+			devip->zoned = false;
 		}
 		devip->create_ts = ktime_get_boottime();
 		atomic_set(&devip->stopped, (sdeb_tur_ms_to_ready > 0 ? 2 : 0));
+		spin_lock_init(&devip->list_lock);
+		INIT_LIST_HEAD(&devip->inject_err_list);
 		list_add_tail(&devip->dev_list, &sdbg_host->dev_info_list);
 	}
 	return devip;
@@ -5146,6 +5884,7 @@ static int scsi_debug_slave_alloc(struct scsi_device *sdp)
 	if (sdebug_verbose)
 		pr_info("slave_alloc <%u %u %u %llu>\n",
 		       sdp->host->host_no, sdp->channel, sdp->id, sdp->lun);
+
 	return 0;
 }
 
@@ -5153,6 +5892,7 @@ static int scsi_debug_slave_configure(struct scsi_device *sdp)
 {
 	struct sdebug_dev_info *devip =
 			(struct sdebug_dev_info *)sdp->hostdata;
+	struct dentry *dentry;
 
 	if (sdebug_verbose)
 		pr_info("slave_configure <%u %u %u %llu>\n",
@@ -5168,6 +5908,22 @@ static int scsi_debug_slave_configure(struct scsi_device *sdp)
 	if (sdebug_no_uld)
 		sdp->no_uld_attach = 1;
 	config_cdb_len(sdp);
+
+	if (sdebug_allow_restart)
+		sdp->allow_restart = 1;
+
+	devip->debugfs_entry = debugfs_create_dir(dev_name(&sdp->sdev_dev),
+				sdebug_debugfs_root);
+	if (IS_ERR_OR_NULL(devip->debugfs_entry))
+		pr_info("%s: failed to create debugfs directory for device %s\n",
+			__func__, dev_name(&sdp->sdev_gendev));
+
+	dentry = debugfs_create_file("error", 0600, devip->debugfs_entry, sdp,
+				&sdebug_error_fops);
+	if (IS_ERR_OR_NULL(dentry))
+		pr_info("%s: failed to create error file for device %s\n",
+			__func__, dev_name(&sdp->sdev_gendev));
+
 	return 0;
 }
 
@@ -5175,2690 +5931,21 @@ static void scsi_debug_slave_destroy(struct scsi_device *sdp)
 {
 	struct sdebug_dev_info *devip =
 		(struct sdebug_dev_info *)sdp->hostdata;
+	struct sdebug_err_inject *err;
 
 	if (sdebug_verbose)
 		pr_info("slave_destroy <%u %u %u %llu>\n",
 		       sdp->host->host_no, sdp->channel, sdp->id, sdp->lun);
-	if (devip) {
-		/* make this slot available for re-use */
-		devip->used = false;
-		sdp->hostdata = NULL;
-	}
-}
-
-/* Returns true if we require the queued memory to be freed by the caller. */
-static bool stop_qc_helper(struct sdebug_defer *sd_dp,
-			   enum sdeb_defer_type defer_t)
-{
-	if (defer_t == SDEB_DEFER_HRT) {
-		int res = hrtimer_try_to_cancel(&sd_dp->hrt);
-
-		switch (res) {
-		case 0: /* Not active, it must have already run */
-		case -1: /* -1 It's executing the CB */
-			return false;
-		case 1: /* Was active, we've now cancelled */
-		default:
-			return true;
-		}
-	} else if (defer_t == SDEB_DEFER_WQ) {
-		/* Cancel if pending */
-		if (cancel_work_sync(&sd_dp->ew.work))
-			return true;
-		/* Was not pending, so it must have run */
-		return false;
-	} else if (defer_t == SDEB_DEFER_POLL) {
-		return true;
-	}
-
-	return false;
-}
-
-
-static bool scsi_debug_stop_cmnd(struct scsi_cmnd *cmnd)
-{
-	enum sdeb_defer_type l_defer_t;
-	struct sdebug_defer *sd_dp;
-	struct sdebug_scsi_cmd *sdsc = scsi_cmd_priv(cmnd);
-	struct sdebug_queued_cmd *sqcp = TO_QUEUED_CMD(cmnd);
-
-	lockdep_assert_held(&sdsc->lock);
-
-	if (!sqcp)
-		return false;
-	sd_dp = &sqcp->sd_dp;
-	l_defer_t = READ_ONCE(sd_dp->defer_t);
-	ASSIGN_QUEUED_CMD(cmnd, NULL);
-
-	if (stop_qc_helper(sd_dp, l_defer_t))
-		sdebug_free_queued_cmd(sqcp);
-
-	return true;
-}
-
-/*
- * Called from scsi_debug_abort() only, which is for timed-out cmd.
- */
-static bool scsi_debug_abort_cmnd(struct scsi_cmnd *cmnd)
-{
-	struct sdebug_scsi_cmd *sdsc = scsi_cmd_priv(cmnd);
-	unsigned long flags;
-	bool res;
-
-	spin_lock_irqsave(&sdsc->lock, flags);
-	res = scsi_debug_stop_cmnd(cmnd);
-	spin_unlock_irqrestore(&sdsc->lock, flags);
-
-	return res;
-}
-
-/*
- * All we can do is set the cmnd as internally aborted and wait for it to
- * finish. We cannot call scsi_done() as normal completion path may do that.
- */
-static bool sdebug_stop_cmnd(struct request *rq, void *data)
-{
-	scsi_debug_abort_cmnd(blk_mq_rq_to_pdu(rq));
-
-	return true;
-}
-
-/* Deletes (stops) timers or work queues of all queued commands */
-static void stop_all_queued(void)
-{
-	struct sdebug_host_info *sdhp;
-
-	mutex_lock(&sdebug_host_list_mutex);
-	list_for_each_entry(sdhp, &sdebug_host_list, host_list) {
-		struct Scsi_Host *shost = sdhp->shost;
-
-		blk_mq_tagset_busy_iter(&shost->tag_set, sdebug_stop_cmnd, NULL);
-	}
-	mutex_unlock(&sdebug_host_list_mutex);
-}
-
-static int scsi_debug_abort(struct scsi_cmnd *SCpnt)
-{
-	bool ok = scsi_debug_abort_cmnd(SCpnt);
-
-	++num_aborts;
-
-	if (SDEBUG_OPT_ALL_NOISE & sdebug_opts)
-		sdev_printk(KERN_INFO, SCpnt->device,
-			    "%s: command%s found\n", __func__,
-			    ok ? "" : " not");
-
-	return SUCCESS;
-}
-
-static bool scsi_debug_stop_all_queued_iter(struct request *rq, void *data)
-{
-	struct scsi_device *sdp = data;
-	struct scsi_cmnd *scmd = blk_mq_rq_to_pdu(rq);
-
-	if (scmd->device == sdp)
-		scsi_debug_abort_cmnd(scmd);
-
-	return true;
-}
-
-/* Deletes (stops) timers or work queues of all queued commands per sdev */
-static void scsi_debug_stop_all_queued(struct scsi_device *sdp)
-{
-	struct Scsi_Host *shost = sdp->host;
-
-	blk_mq_tagset_busy_iter(&shost->tag_set,
-				scsi_debug_stop_all_queued_iter, sdp);
-}
-
-static int scsi_debug_device_reset(struct scsi_cmnd *SCpnt)
-{
-	struct scsi_device *sdp = SCpnt->device;
-	struct sdebug_dev_info *devip = sdp->hostdata;
-
-	++num_dev_resets;
-
-	if (SDEBUG_OPT_ALL_NOISE & sdebug_opts)
-		sdev_printk(KERN_INFO, sdp, "%s\n", __func__);
-
-	scsi_debug_stop_all_queued(sdp);
-	if (devip)
-		set_bit(SDEBUG_UA_POR, devip->uas_bm);
-
-	return SUCCESS;
-}
-
-static int scsi_debug_target_reset(struct scsi_cmnd *SCpnt)
-{
-	struct scsi_device *sdp = SCpnt->device;
-	struct sdebug_host_info *sdbg_host = shost_to_sdebug_host(sdp->host);
-	struct sdebug_dev_info *devip;
-	int k = 0;
-
-	++num_target_resets;
-	if (SDEBUG_OPT_ALL_NOISE & sdebug_opts)
-		sdev_printk(KERN_INFO, sdp, "%s\n", __func__);
-
-	list_for_each_entry(devip, &sdbg_host->dev_info_list, dev_list) {
-		if (devip->target == sdp->id) {
-			set_bit(SDEBUG_UA_BUS_RESET, devip->uas_bm);
-			++k;
-		}
-	}
-
-	if (SDEBUG_OPT_RESET_NOISE & sdebug_opts)
-		sdev_printk(KERN_INFO, sdp,
-			    "%s: %d device(s) found in target\n", __func__, k);
-
-	return SUCCESS;
-}
-
-static int scsi_debug_bus_reset(struct scsi_cmnd *SCpnt)
-{
-	struct scsi_device *sdp = SCpnt->device;
-	struct sdebug_host_info *sdbg_host = shost_to_sdebug_host(sdp->host);
-	struct sdebug_dev_info *devip;
-	int k = 0;
-
-	++num_bus_resets;
-
-	if (SDEBUG_OPT_ALL_NOISE & sdebug_opts)
-		sdev_printk(KERN_INFO, sdp, "%s\n", __func__);
-
-	list_for_each_entry(devip, &sdbg_host->dev_info_list, dev_list) {
-		set_bit(SDEBUG_UA_BUS_RESET, devip->uas_bm);
-		++k;
-	}
-
-	if (SDEBUG_OPT_RESET_NOISE & sdebug_opts)
-		sdev_printk(KERN_INFO, sdp,
-			    "%s: %d device(s) found in host\n", __func__, k);
-	return SUCCESS;
-}
-
-static int scsi_debug_host_reset(struct scsi_cmnd *SCpnt)
-{
-	struct sdebug_host_info *sdbg_host;
-	struct sdebug_dev_info *devip;
-	int k = 0;
-
-	++num_host_resets;
-	if (SDEBUG_OPT_ALL_NOISE & sdebug_opts)
-		sdev_printk(KERN_INFO, SCpnt->device, "%s\n", __func__);
-	mutex_lock(&sdebug_host_list_mutex);
-	list_for_each_entry(sdbg_host, &sdebug_host_list, host_list) {
-		list_for_each_entry(devip, &sdbg_host->dev_info_list,
-				    dev_list) {
-			set_bit(SDEBUG_UA_BUS_RESET, devip->uas_bm);
-			++k;
-		}
-	}
-	mutex_unlock(&sdebug_host_list_mutex);
-	stop_all_queued();
-	if (SDEBUG_OPT_RESET_NOISE & sdebug_opts)
-		sdev_printk(KERN_INFO, SCpnt->device,
-			    "%s: %d device(s) found\n", __func__, k);
-	return SUCCESS;
-}
-
-static void sdebug_build_parts(unsigned char *ramp, unsigned long store_size)
-{
-	struct msdos_partition *pp;
-	int starts[SDEBUG_MAX_PARTS + 2], max_part_secs;
-	int sectors_per_part, num_sectors, k;
-	int heads_by_sects, start_sec, end_sec;
-
-	/* assume partition table already zeroed */
-	if ((sdebug_num_parts < 1) || (store_size < 1048576))
-		return;
-	if (sdebug_num_parts > SDEBUG_MAX_PARTS) {
-		sdebug_num_parts = SDEBUG_MAX_PARTS;
-		pr_warn("reducing partitions to %d\n", SDEBUG_MAX_PARTS);
-	}
-	num_sectors = (int)get_sdebug_capacity();
-	sectors_per_part = (num_sectors - sdebug_sectors_per)
-			   / sdebug_num_parts;
-	heads_by_sects = sdebug_heads * sdebug_sectors_per;
-	starts[0] = sdebug_sectors_per;
-	max_part_secs = sectors_per_part;
-	for (k = 1; k < sdebug_num_parts; ++k) {
-		starts[k] = ((k * sectors_per_part) / heads_by_sects)
-			    * heads_by_sects;
-		if (starts[k] - starts[k - 1] < max_part_secs)
-			max_part_secs = starts[k] - starts[k - 1];
-	}
-	starts[sdebug_num_parts] = num_sectors;
-	starts[sdebug_num_parts + 1] = 0;
-
-	ramp[510] = 0x55;	/* magic partition markings */
-	ramp[511] = 0xAA;
-	pp = (struct msdos_partition *)(ramp + 0x1be);
-	for (k = 0; starts[k + 1]; ++k, ++pp) {
-		start_sec = starts[k];
-		end_sec = starts[k] + max_part_secs - 1;
-		pp->boot_ind = 0;
-
-		pp->cyl = start_sec / heads_by_sects;
-		pp->head = (start_sec - (pp->cyl * heads_by_sects))
-			   / sdebug_sectors_per;
-		pp->sector = (start_sec % sdebug_sectors_per) + 1;
-
-		pp->end_cyl = end_sec / heads_by_sects;
-		pp->end_head = (end_sec - (pp->end_cyl * heads_by_sects))
-			       / sdebug_sectors_per;
-		pp->end_sector = (end_sec % sdebug_sectors_per) + 1;
-
-		pp->start_sect = cpu_to_le32(start_sec);
-		pp->nr_sects = cpu_to_le32(end_sec - start_sec + 1);
-		pp->sys_ind = 0x83;	/* plain Linux partition */
-	}
-}
-
-static void block_unblock_all_queues(bool block)
-{
-	struct sdebug_host_info *sdhp;
-
-	lockdep_assert_held(&sdebug_host_list_mutex);
-
-	list_for_each_entry(sdhp, &sdebug_host_list, host_list) {
-		struct Scsi_Host *shost = sdhp->shost;
-
-		if (block)
-			scsi_block_requests(shost);
-		else
-			scsi_unblock_requests(shost);
-	}
-}
-
-/* Adjust (by rounding down) the sdebug_cmnd_count so abs(every_nth)-1
- * commands will be processed normally before triggers occur.
- */
-static void tweak_cmnd_count(void)
-{
-	int count, modulo;
-
-	modulo = abs(sdebug_every_nth);
-	if (modulo < 2)
-		return;
-
-	mutex_lock(&sdebug_host_list_mutex);
-	block_unblock_all_queues(true);
-	count = atomic_read(&sdebug_cmnd_count);
-	atomic_set(&sdebug_cmnd_count, (count / modulo) * modulo);
-	block_unblock_all_queues(false);
-	mutex_unlock(&sdebug_host_list_mutex);
-}
-
-static void clear_queue_stats(void)
-{
-	atomic_set(&sdebug_cmnd_count, 0);
-	atomic_set(&sdebug_completions, 0);
-	atomic_set(&sdebug_miss_cpus, 0);
-	atomic_set(&sdebug_a_tsf, 0);
-}
-
-static bool inject_on_this_cmd(void)
-{
-	if (sdebug_every_nth == 0)
-		return false;
-	return (atomic_read(&sdebug_cmnd_count) % abs(sdebug_every_nth)) == 0;
-}
-
-#define INCLUSIVE_TIMING_MAX_NS 1000000		/* 1 millisecond */
-
-
-void sdebug_free_queued_cmd(struct sdebug_queued_cmd *sqcp)
-{
-	if (sqcp)
-		kmem_cache_free(queued_cmd_cache, sqcp);
-}
-
-static struct sdebug_queued_cmd *sdebug_alloc_queued_cmd(struct scsi_cmnd *scmd)
-{
-	struct sdebug_queued_cmd *sqcp;
-	struct sdebug_defer *sd_dp;
-
-	sqcp = kmem_cache_zalloc(queued_cmd_cache, GFP_ATOMIC);
-	if (!sqcp)
-		return NULL;
-
-	sd_dp = &sqcp->sd_dp;
-
-	hrtimer_init(&sd_dp->hrt, CLOCK_MONOTONIC, HRTIMER_MODE_REL_PINNED);
-	sd_dp->hrt.function = sdebug_q_cmd_hrt_complete;
-	INIT_WORK(&sd_dp->ew.work, sdebug_q_cmd_wq_complete);
-
-	sqcp->scmd = scmd;
-
-	return sqcp;
-}
-
-/* Complete the processing of the thread that queued a SCSI command to this
- * driver. It either completes the command by calling cmnd_done() or
- * schedules a hr timer or work queue then returns 0. Returns
- * SCSI_MLQUEUE_HOST_BUSY if temporarily out of resources.
- */
-static int schedule_resp(struct scsi_cmnd *cmnd, struct sdebug_dev_info *devip,
-			 int scsi_result,
-			 int (*pfp)(struct scsi_cmnd *,
-				    struct sdebug_dev_info *),
-			 int delta_jiff, int ndelay)
-{
-	struct request *rq = scsi_cmd_to_rq(cmnd);
-	bool polled = rq->cmd_flags & REQ_POLLED;
-	struct sdebug_scsi_cmd *sdsc = scsi_cmd_priv(cmnd);
-	unsigned long flags;
-	u64 ns_from_boot = 0;
-	struct sdebug_queued_cmd *sqcp;
-	struct scsi_device *sdp;
-	struct sdebug_defer *sd_dp;
-
-	if (unlikely(devip == NULL)) {
-		if (scsi_result == 0)
-			scsi_result = DID_NO_CONNECT << 16;
-		goto respond_in_thread;
-	}
-	sdp = cmnd->device;
-
-	if (delta_jiff == 0)
-		goto respond_in_thread;
-
-
-	if (unlikely(sdebug_every_nth && (SDEBUG_OPT_RARE_TSF & sdebug_opts) &&
-		     (scsi_result == 0))) {
-		int num_in_q = scsi_device_busy(sdp);
-		int qdepth = cmnd->device->queue_depth;
-
-		if ((num_in_q == qdepth) &&
-		    (atomic_inc_return(&sdebug_a_tsf) >=
-		     abs(sdebug_every_nth))) {
-			atomic_set(&sdebug_a_tsf, 0);
-			scsi_result = device_qfull_result;
-
-			if (unlikely(SDEBUG_OPT_Q_NOISE & sdebug_opts))
-				sdev_printk(KERN_INFO, sdp, "%s: num_in_q=%d +1, <inject> status: TASK SET FULL\n",
-					    __func__, num_in_q);
-		}
-	}
-
-	sqcp = sdebug_alloc_queued_cmd(cmnd);
-	if (!sqcp) {
-		pr_err("%s no alloc\n", __func__);
-		return SCSI_MLQUEUE_HOST_BUSY;
-	}
-	sd_dp = &sqcp->sd_dp;
-
-	if (polled)
-		ns_from_boot = ktime_get_boottime_ns();
-
-	/* one of the resp_*() response functions is called here */
-	cmnd->result = pfp ? pfp(cmnd, devip) : 0;
-	if (cmnd->result & SDEG_RES_IMMED_MASK) {
-		cmnd->result &= ~SDEG_RES_IMMED_MASK;
-		delta_jiff = ndelay = 0;
-	}
-	if (cmnd->result == 0 && scsi_result != 0)
-		cmnd->result = scsi_result;
-	if (cmnd->result == 0 && unlikely(sdebug_opts & SDEBUG_OPT_TRANSPORT_ERR)) {
-		if (atomic_read(&sdeb_inject_pending)) {
-			mk_sense_buffer(cmnd, ABORTED_COMMAND, TRANSPORT_PROBLEM, ACK_NAK_TO);
-			atomic_set(&sdeb_inject_pending, 0);
-			cmnd->result = check_condition_result;
-		}
-	}
-
-	if (unlikely(sdebug_verbose && cmnd->result))
-		sdev_printk(KERN_INFO, sdp, "%s: non-zero result=0x%x\n",
-			    __func__, cmnd->result);
-
-	if (delta_jiff > 0 || ndelay > 0) {
-		ktime_t kt;
-
-		if (delta_jiff > 0) {
-			u64 ns = jiffies_to_nsecs(delta_jiff);
-
-			if (sdebug_random && ns < U32_MAX) {
-				ns = get_random_u32_below((u32)ns);
-			} else if (sdebug_random) {
-				ns >>= 12;	/* scale to 4 usec precision */
-				if (ns < U32_MAX)	/* over 4 hours max */
-					ns = get_random_u32_below((u32)ns);
-				ns <<= 12;
-			}
-			kt = ns_to_ktime(ns);
-		} else {	/* ndelay has a 4.2 second max */
-			kt = sdebug_random ? get_random_u32_below((u32)ndelay) :
-					     (u32)ndelay;
-			if (ndelay < INCLUSIVE_TIMING_MAX_NS) {
-				u64 d = ktime_get_boottime_ns() - ns_from_boot;
-
-				if (kt <= d) {	/* elapsed duration >= kt */
-					/* call scsi_done() from this thread */
-					sdebug_free_queued_cmd(sqcp);
-					scsi_done(cmnd);
-					return 0;
-				}
-				/* otherwise reduce kt by elapsed time */
-				kt -= d;
-			}
-		}
-		if (sdebug_statistics)
-			sd_dp->issuing_cpu = raw_smp_processor_id();
-		if (polled) {
-			spin_lock_irqsave(&sdsc->lock, flags);
-			sd_dp->cmpl_ts = ktime_add(ns_to_ktime(ns_from_boot), kt);
-			ASSIGN_QUEUED_CMD(cmnd, sqcp);
-			WRITE_ONCE(sd_dp->defer_t, SDEB_DEFER_POLL);
-			spin_unlock_irqrestore(&sdsc->lock, flags);
-		} else {
-			/* schedule the invocation of scsi_done() for a later time */
-			spin_lock_irqsave(&sdsc->lock, flags);
-			ASSIGN_QUEUED_CMD(cmnd, sqcp);
-			WRITE_ONCE(sd_dp->defer_t, SDEB_DEFER_HRT);
-			hrtimer_start(&sd_dp->hrt, kt, HRTIMER_MODE_REL_PINNED);
-			/*
-			 * The completion handler will try to grab sqcp->lock,
-			 * so there is no chance that the completion handler
-			 * will call scsi_done() until we release the lock
-			 * here (so ok to keep referencing sdsc).
-			 */
-			spin_unlock_irqrestore(&sdsc->lock, flags);
-		}
-	} else {	/* jdelay < 0, use work queue */
-		if (unlikely((sdebug_opts & SDEBUG_OPT_CMD_ABORT) &&
-			     atomic_read(&sdeb_inject_pending))) {
-			sd_dp->aborted = true;
-			atomic_set(&sdeb_inject_pending, 0);
-			sdev_printk(KERN_INFO, sdp, "abort request tag=%#x\n",
-				    blk_mq_unique_tag_to_tag(get_tag(cmnd)));
-		}
-
-		if (sdebug_statistics)
-			sd_dp->issuing_cpu = raw_smp_processor_id();
-		if (polled) {
-			spin_lock_irqsave(&sdsc->lock, flags);
-			ASSIGN_QUEUED_CMD(cmnd, sqcp);
-			sd_dp->cmpl_ts = ns_to_ktime(ns_from_boot);
-			WRITE_ONCE(sd_dp->defer_t, SDEB_DEFER_POLL);
-			spin_unlock_irqrestore(&sdsc->lock, flags);
-		} else {
-			spin_lock_irqsave(&sdsc->lock, flags);
-			ASSIGN_QUEUED_CMD(cmnd, sqcp);
-			WRITE_ONCE(sd_dp->defer_t, SDEB_DEFER_WQ);
-			schedule_work(&sd_dp->ew.work);
-			spin_unlock_irqrestore(&sdsc->lock, flags);
-		}
-	}
-
-	return 0;
-
-respond_in_thread:	/* call back to mid-layer using invocation thread */
-	cmnd->result = pfp != NULL ? pfp(cmnd, devip) : 0;
-	cmnd->result &= ~SDEG_RES_IMMED_MASK;
-	if (cmnd->result == 0 && scsi_result != 0)
-		cmnd->result = scsi_result;
-	scsi_done(cmnd);
-	return 0;
-}
-
-/* Note: The following macros create attribute files in the
-   /sys/module/scsi_debug/parameters directory. Unfortunately this
-   driver is unaware of a change and cannot trigger auxiliary actions
-   as it can when the corresponding attribute in the
-   /sys/bus/pseudo/drivers/scsi_debug directory is changed.
- */
-module_param_named(add_host, sdebug_add_host, int, S_IRUGO | S_IWUSR);
-module_param_named(ato, sdebug_ato, int, S_IRUGO);
-module_param_named(cdb_len, sdebug_cdb_len, int, 0644);
-module_param_named(clustering, sdebug_clustering, bool, S_IRUGO | S_IWUSR);
-module_param_named(delay, sdebug_jdelay, int, S_IRUGO | S_IWUSR);
-module_param_named(dev_size_mb, sdebug_dev_size_mb, int, S_IRUGO);
-module_param_named(dif, sdebug_dif, int, S_IRUGO);
-module_param_named(dix, sdebug_dix, int, S_IRUGO);
-module_param_named(dsense, sdebug_dsense, int, S_IRUGO | S_IWUSR);
-module_param_named(every_nth, sdebug_every_nth, int, S_IRUGO | S_IWUSR);
-module_param_named(fake_rw, sdebug_fake_rw, int, S_IRUGO | S_IWUSR);
-module_param_named(guard, sdebug_guard, uint, S_IRUGO);
-module_param_named(host_lock, sdebug_host_lock, bool, S_IRUGO | S_IWUSR);
-module_param_named(host_max_queue, sdebug_host_max_queue, int, S_IRUGO);
-module_param_string(inq_product, sdebug_inq_product_id,
-		    sizeof(sdebug_inq_product_id), S_IRUGO | S_IWUSR);
-module_param_string(inq_rev, sdebug_inq_product_rev,
-		    sizeof(sdebug_inq_product_rev), S_IRUGO | S_IWUSR);
-module_param_string(inq_vendor, sdebug_inq_vendor_id,
-		    sizeof(sdebug_inq_vendor_id), S_IRUGO | S_IWUSR);
-module_param_named(lbprz, sdebug_lbprz, int, S_IRUGO);
-module_param_named(lbpu, sdebug_lbpu, int, S_IRUGO);
-module_param_named(lbpws, sdebug_lbpws, int, S_IRUGO);
-module_param_named(lbpws10, sdebug_lbpws10, int, S_IRUGO);
-module_param_named(lowest_aligned, sdebug_lowest_aligned, int, S_IRUGO);
-module_param_named(lun_format, sdebug_lun_am_i, int, S_IRUGO | S_IWUSR);
-module_param_named(max_luns, sdebug_max_luns, int, S_IRUGO | S_IWUSR);
-module_param_named(max_queue, sdebug_max_queue, int, S_IRUGO | S_IWUSR);
-module_param_named(medium_error_count, sdebug_medium_error_count, int,
-		   S_IRUGO | S_IWUSR);
-module_param_named(medium_error_start, sdebug_medium_error_start, int,
-		   S_IRUGO | S_IWUSR);
-module_param_named(ndelay, sdebug_ndelay, int, S_IRUGO | S_IWUSR);
-module_param_named(no_lun_0, sdebug_no_lun_0, int, S_IRUGO | S_IWUSR);
-module_param_named(no_rwlock, sdebug_no_rwlock, bool, S_IRUGO | S_IWUSR);
-module_param_named(no_uld, sdebug_no_uld, int, S_IRUGO);
-module_param_named(num_parts, sdebug_num_parts, int, S_IRUGO);
-module_param_named(num_tgts, sdebug_num_tgts, int, S_IRUGO | S_IWUSR);
-module_param_named(opt_blks, sdebug_opt_blks, int, S_IRUGO);
-module_param_named(opt_xferlen_exp, sdebug_opt_xferlen_exp, int, S_IRUGO);
-module_param_named(opts, sdebug_opts, int, S_IRUGO | S_IWUSR);
-module_param_named(per_host_store, sdebug_per_host_store, bool,
-		   S_IRUGO | S_IWUSR);
-module_param_named(physblk_exp, sdebug_physblk_exp, int, S_IRUGO);
-module_param_named(ptype, sdebug_ptype, int, S_IRUGO | S_IWUSR);
-module_param_named(random, sdebug_random, bool, S_IRUGO | S_IWUSR);
-module_param_named(removable, sdebug_removable, bool, S_IRUGO | S_IWUSR);
-module_param_named(scsi_level, sdebug_scsi_level, int, S_IRUGO);
-module_param_named(sector_size, sdebug_sector_size, int, S_IRUGO);
-module_param_named(statistics, sdebug_statistics, bool, S_IRUGO | S_IWUSR);
-module_param_named(strict, sdebug_strict, bool, S_IRUGO | S_IWUSR);
-module_param_named(submit_queues, submit_queues, int, S_IRUGO);
-module_param_named(poll_queues, poll_queues, int, S_IRUGO);
-module_param_named(tur_ms_to_ready, sdeb_tur_ms_to_ready, int, S_IRUGO);
-module_param_named(unmap_alignment, sdebug_unmap_alignment, int, S_IRUGO);
-module_param_named(unmap_granularity, sdebug_unmap_granularity, int, S_IRUGO);
-module_param_named(unmap_max_blocks, sdebug_unmap_max_blocks, int, S_IRUGO);
-module_param_named(unmap_max_desc, sdebug_unmap_max_desc, int, S_IRUGO);
-module_param_named(uuid_ctl, sdebug_uuid_ctl, int, S_IRUGO);
-module_param_named(virtual_gb, sdebug_virtual_gb, int, S_IRUGO | S_IWUSR);
-module_param_named(vpd_use_hostno, sdebug_vpd_use_hostno, int,
-		   S_IRUGO | S_IWUSR);
-module_param_named(wp, sdebug_wp, bool, S_IRUGO | S_IWUSR);
-module_param_named(write_same_length, sdebug_write_same_length, int,
-		   S_IRUGO | S_IWUSR);
-module_param_named(zbc, sdeb_zbc_model_s, charp, S_IRUGO);
-module_param_named(zone_cap_mb, sdeb_zbc_zone_cap_mb, int, S_IRUGO);
-module_param_named(zone_max_open, sdeb_zbc_max_open, int, S_IRUGO);
-module_param_named(zone_nr_conv, sdeb_zbc_nr_conv, int, S_IRUGO);
-module_param_named(zone_size_mb, sdeb_zbc_zone_size_mb, int, S_IRUGO);
-
-MODULE_AUTHOR("Eric Youngdale + Douglas Gilbert");
-MODULE_DESCRIPTION("SCSI debug adapter driver");
-MODULE_LICENSE("GPL");
-MODULE_VERSION(SDEBUG_VERSION);
-
-MODULE_PARM_DESC(add_host, "add n hosts, in sysfs if negative remove host(s) (def=1)");
-MODULE_PARM_DESC(ato, "application tag ownership: 0=disk 1=host (def=1)");
-MODULE_PARM_DESC(cdb_len, "suggest CDB lengths to drivers (def=10)");
-MODULE_PARM_DESC(clustering, "when set enables larger transfers (def=0)");
-MODULE_PARM_DESC(delay, "response delay (def=1 jiffy); 0:imm, -1,-2:tiny");
-MODULE_PARM_DESC(dev_size_mb, "size in MiB of ram shared by devs(def=8)");
-MODULE_PARM_DESC(dif, "data integrity field type: 0-3 (def=0)");
-MODULE_PARM_DESC(dix, "data integrity extensions mask (def=0)");
-MODULE_PARM_DESC(dsense, "use descriptor sense format(def=0 -> fixed)");
-MODULE_PARM_DESC(every_nth, "timeout every nth command(def=0)");
-MODULE_PARM_DESC(fake_rw, "fake reads/writes instead of copying (def=0)");
-MODULE_PARM_DESC(guard, "protection checksum: 0=crc, 1=ip (def=0)");
-MODULE_PARM_DESC(host_lock, "host_lock is ignored (def=0)");
-MODULE_PARM_DESC(host_max_queue,
-		 "host max # of queued cmds (0 to max(def) [max_queue fixed equal for !0])");
-MODULE_PARM_DESC(inq_product, "SCSI INQUIRY product string (def=\"scsi_debug\")");
-MODULE_PARM_DESC(inq_rev, "SCSI INQUIRY revision string (def=\""
-		 SDEBUG_VERSION "\")");
-MODULE_PARM_DESC(inq_vendor, "SCSI INQUIRY vendor string (def=\"Linux\")");
-MODULE_PARM_DESC(lbprz,
-		 "on read unmapped LBs return 0 when 1 (def), return 0xff when 2");
-MODULE_PARM_DESC(lbpu, "enable LBP, support UNMAP command (def=0)");
-MODULE_PARM_DESC(lbpws, "enable LBP, support WRITE SAME(16) with UNMAP bit (def=0)");
-MODULE_PARM_DESC(lbpws10, "enable LBP, support WRITE SAME(10) with UNMAP bit (def=0)");
-MODULE_PARM_DESC(lowest_aligned, "lowest aligned lba (def=0)");
-MODULE_PARM_DESC(lun_format, "LUN format: 0->peripheral (def); 1 --> flat address method");
-MODULE_PARM_DESC(max_luns, "number of LUNs per target to simulate(def=1)");
-MODULE_PARM_DESC(max_queue, "max number of queued commands (1 to max(def))");
-MODULE_PARM_DESC(medium_error_count, "count of sectors to return follow on MEDIUM error");
-MODULE_PARM_DESC(medium_error_start, "starting sector number to return MEDIUM error");
-MODULE_PARM_DESC(ndelay, "response delay in nanoseconds (def=0 -> ignore)");
-MODULE_PARM_DESC(no_lun_0, "no LU number 0 (def=0 -> have lun 0)");
-MODULE_PARM_DESC(no_rwlock, "don't protect user data reads+writes (def=0)");
-MODULE_PARM_DESC(no_uld, "stop ULD (e.g. sd driver) attaching (def=0))");
-MODULE_PARM_DESC(num_parts, "number of partitions(def=0)");
-MODULE_PARM_DESC(num_tgts, "number of targets per host to simulate(def=1)");
-MODULE_PARM_DESC(opt_blks, "optimal transfer length in blocks (def=1024)");
-MODULE_PARM_DESC(opt_xferlen_exp, "optimal transfer length granularity exponent (def=physblk_exp)");
-MODULE_PARM_DESC(opts, "1->noise, 2->medium_err, 4->timeout, 8->recovered_err... (def=0)");
-MODULE_PARM_DESC(per_host_store, "If set, next positive add_host will get new store (def=0)");
-MODULE_PARM_DESC(physblk_exp, "physical block exponent (def=0)");
-MODULE_PARM_DESC(poll_queues, "support for iouring iopoll queues (1 to max(submit_queues - 1))");
-MODULE_PARM_DESC(ptype, "SCSI peripheral type(def=0[disk])");
-MODULE_PARM_DESC(random, "If set, uniformly randomize command duration between 0 and delay_in_ns");
-MODULE_PARM_DESC(removable, "claim to have removable media (def=0)");
-MODULE_PARM_DESC(scsi_level, "SCSI level to simulate(def=7[SPC-5])");
-MODULE_PARM_DESC(sector_size, "logical block size in bytes (def=512)");
-MODULE_PARM_DESC(statistics, "collect statistics on commands, queues (def=0)");
-MODULE_PARM_DESC(strict, "stricter checks: reserved field in cdb (def=0)");
-MODULE_PARM_DESC(submit_queues, "support for block multi-queue (def=1)");
-MODULE_PARM_DESC(tur_ms_to_ready, "TEST UNIT READY millisecs before initial good status (def=0)");
-MODULE_PARM_DESC(unmap_alignment, "lowest aligned thin provisioning lba (def=0)");
-MODULE_PARM_DESC(unmap_granularity, "thin provisioning granularity in blocks (def=1)");
-MODULE_PARM_DESC(unmap_max_blocks, "max # of blocks can be unmapped in one cmd (def=0xffffffff)");
-MODULE_PARM_DESC(unmap_max_desc, "max # of ranges that can be unmapped in one cmd (def=256)");
-MODULE_PARM_DESC(uuid_ctl,
-		 "1->use uuid for lu name, 0->don't, 2->all use same (def=0)");
-MODULE_PARM_DESC(virtual_gb, "virtual gigabyte (GiB) size (def=0 -> use dev_size_mb)");
-MODULE_PARM_DESC(vpd_use_hostno, "0 -> dev ids ignore hostno (def=1 -> unique dev ids)");
-MODULE_PARM_DESC(wp, "Write Protect (def=0)");
-MODULE_PARM_DESC(write_same_length, "Maximum blocks per WRITE SAME cmd (def=0xffff)");
-MODULE_PARM_DESC(zbc, "'none' [0]; 'aware' [1]; 'managed' [2] (def=0). Can have 'host-' prefix");
-MODULE_PARM_DESC(zone_cap_mb, "Zone capacity in MiB (def=zone size)");
-MODULE_PARM_DESC(zone_max_open, "Maximum number of open zones; [0] for no limit (def=auto)");
-MODULE_PARM_DESC(zone_nr_conv, "Number of conventional zones (def=1)");
-MODULE_PARM_DESC(zone_size_mb, "Zone size in MiB (def=auto)");
-
-#define SDEBUG_INFO_LEN 256
-static char sdebug_info[SDEBUG_INFO_LEN];
-
-static const char *scsi_debug_info(struct Scsi_Host *shp)
-{
-	int k;
-
-	k = scnprintf(sdebug_info, SDEBUG_INFO_LEN, "%s: version %s [%s]\n",
-		      my_name, SDEBUG_VERSION, sdebug_version_date);
-	if (k >= (SDEBUG_INFO_LEN - 1))
-		return sdebug_info;
-	scnprintf(sdebug_info + k, SDEBUG_INFO_LEN - k,
-		  "  dev_size_mb=%d, opts=0x%x, submit_queues=%d, %s=%d",
-		  sdebug_dev_size_mb, sdebug_opts, submit_queues,
-		  "statistics", (int)sdebug_statistics);
-	return sdebug_info;
-}
-
-/* 'echo <val> > /proc/scsi/scsi_debug/<host_id>' writes to opts */
-static int scsi_debug_write_info(struct Scsi_Host *host, char *buffer,
-				 int length)
-{
-	char arr[16];
-	int opts;
-	int minLen = length > 15 ? 15 : length;
-
-	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_SYS_RAWIO))
-		return -EACCES;
-	memcpy(arr, buffer, minLen);
-	arr[minLen] = '\0';
-	if (1 != sscanf(arr, "%d", &opts))
-		return -EINVAL;
-	sdebug_opts = opts;
-	sdebug_verbose = !!(SDEBUG_OPT_NOISE & opts);
-	sdebug_any_injecting_opt = !!(SDEBUG_OPT_ALL_INJECTING & opts);
-	if (sdebug_every_nth != 0)
-		tweak_cmnd_count();
-	return length;
-}
-
-struct sdebug_submit_queue_data {
-	int *first;
-	int *last;
-	int queue_num;
-};
-
-static bool sdebug_submit_queue_iter(struct request *rq, void *opaque)
-{
-	struct sdebug_submit_queue_data *data = opaque;
-	u32 unique_tag = blk_mq_unique_tag(rq);
-	u16 hwq = blk_mq_unique_tag_to_hwq(unique_tag);
-	u16 tag = blk_mq_unique_tag_to_tag(unique_tag);
-	int queue_num = data->queue_num;
-
-	if (hwq != queue_num)
-		return true;
-
-	/* Rely on iter'ing in ascending tag order */
-	if (*data->first == -1)
-		*data->first = *data->last = tag;
-	else
-		*data->last = tag;
-
-	return true;
-}
-
-/* Output seen with 'cat /proc/scsi/scsi_debug/<host_id>'. It will be the
- * same for each scsi_debug host (if more than one). Some of the counters
- * output are not atomics so might be inaccurate in a busy system. */
-static int scsi_debug_show_info(struct seq_file *m, struct Scsi_Host *host)
-{
-	struct sdebug_host_info *sdhp;
-	int j;
-
-	seq_printf(m, "scsi_debug adapter driver, version %s [%s]\n",
-		   SDEBUG_VERSION, sdebug_version_date);
-	seq_printf(m, "num_tgts=%d, %ssize=%d MB, opts=0x%x, every_nth=%d\n",
-		   sdebug_num_tgts, "shared (ram) ", sdebug_dev_size_mb,
-		   sdebug_opts, sdebug_every_nth);
-	seq_printf(m, "delay=%d, ndelay=%d, max_luns=%d, sector_size=%d %s\n",
-		   sdebug_jdelay, sdebug_ndelay, sdebug_max_luns,
-		   sdebug_sector_size, "bytes");
-	seq_printf(m, "cylinders=%d, heads=%d, sectors=%d, command aborts=%d\n",
-		   sdebug_cylinders_per, sdebug_heads, sdebug_sectors_per,
-		   num_aborts);
-	seq_printf(m, "RESETs: device=%d, target=%d, bus=%d, host=%d\n",
-		   num_dev_resets, num_target_resets, num_bus_resets,
-		   num_host_resets);
-	seq_printf(m, "dix_reads=%d, dix_writes=%d, dif_errors=%d\n",
-		   dix_reads, dix_writes, dif_errors);
-	seq_printf(m, "usec_in_jiffy=%lu, statistics=%d\n", TICK_NSEC / 1000,
-		   sdebug_statistics);
-	seq_printf(m, "cmnd_count=%d, completions=%d, %s=%d, a_tsf=%d, mq_polls=%d\n",
-		   atomic_read(&sdebug_cmnd_count),
-		   atomic_read(&sdebug_completions),
-		   "miss_cpus", atomic_read(&sdebug_miss_cpus),
-		   atomic_read(&sdebug_a_tsf),
-		   atomic_read(&sdeb_mq_poll_count));
-
-	seq_printf(m, "submit_queues=%d\n", submit_queues);
-	for (j = 0; j < submit_queues; ++j) {
-		int f = -1, l = -1;
-		struct sdebug_submit_queue_data data = {
-			.queue_num = j,
-			.first = &f,
-			.last = &l,
-		};
-		seq_printf(m, "  queue %d:\n", j);
-		blk_mq_tagset_busy_iter(&host->tag_set, sdebug_submit_queue_iter,
-					&data);
-		if (f >= 0) {
-			seq_printf(m, "    in_use_bm BUSY: %s: %d,%d\n",
-				   "first,last bits", f, l);
-		}
-	}
-
-	seq_printf(m, "this host_no=%d\n", host->host_no);
-	if (!xa_empty(per_store_ap)) {
-		bool niu;
-		int idx;
-		unsigned long l_idx;
-		struct sdeb_store_info *sip;
-
-		seq_puts(m, "\nhost list:\n");
-		j = 0;
-		list_for_each_entry(sdhp, &sdebug_host_list, host_list) {
-			idx = sdhp->si_idx;
-			seq_printf(m, "  %d: host_no=%d, si_idx=%d\n", j,
-				   sdhp->shost->host_no, idx);
-			++j;
-		}
-		seq_printf(m, "\nper_store array [most_recent_idx=%d]:\n",
-			   sdeb_most_recent_idx);
-		j = 0;
-		xa_for_each(per_store_ap, l_idx, sip) {
-			niu = xa_get_mark(per_store_ap, l_idx,
-					  SDEB_XA_NOT_IN_USE);
-			idx = (int)l_idx;
-			seq_printf(m, "  %d: idx=%d%s\n", j, idx,
-				   (niu ? "  not_in_use" : ""));
-			++j;
-		}
-	}
-	return 0;
-}
-
-static ssize_t delay_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_jdelay);
-}
-/* Returns -EBUSY if jdelay is being changed and commands are queued. The unit
- * of delay is jiffies.
- */
-static ssize_t delay_store(struct device_driver *ddp, const char *buf,
-			   size_t count)
-{
-	int jdelay, res;
-
-	if (count > 0 && sscanf(buf, "%d", &jdelay) == 1) {
-		res = count;
-		if (sdebug_jdelay != jdelay) {
-			struct sdebug_host_info *sdhp;
-
-			mutex_lock(&sdebug_host_list_mutex);
-			block_unblock_all_queues(true);
-
-			list_for_each_entry(sdhp, &sdebug_host_list, host_list) {
-				struct Scsi_Host *shost = sdhp->shost;
-
-				if (scsi_host_busy(shost)) {
-					res = -EBUSY;   /* queued commands */
-					break;
-				}
-			}
-			if (res > 0) {
-				sdebug_jdelay = jdelay;
-				sdebug_ndelay = 0;
-			}
-			block_unblock_all_queues(false);
-			mutex_unlock(&sdebug_host_list_mutex);
-		}
-		return res;
-	}
-	return -EINVAL;
-}
-static DRIVER_ATTR_RW(delay);
-
-static ssize_t ndelay_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_ndelay);
-}
-/* Returns -EBUSY if ndelay is being changed and commands are queued */
-/* If > 0 and accepted then sdebug_jdelay is set to JDELAY_OVERRIDDEN */
-static ssize_t ndelay_store(struct device_driver *ddp, const char *buf,
-			    size_t count)
-{
-	int ndelay, res;
-
-	if ((count > 0) && (1 == sscanf(buf, "%d", &ndelay)) &&
-	    (ndelay >= 0) && (ndelay < (1000 * 1000 * 1000))) {
-		res = count;
-		if (sdebug_ndelay != ndelay) {
-			struct sdebug_host_info *sdhp;
-
-			mutex_lock(&sdebug_host_list_mutex);
-			block_unblock_all_queues(true);
-
-			list_for_each_entry(sdhp, &sdebug_host_list, host_list) {
-				struct Scsi_Host *shost = sdhp->shost;
-
-				if (scsi_host_busy(shost)) {
-					res = -EBUSY;   /* queued commands */
-					break;
-				}
-			}
-
-			if (res > 0) {
-				sdebug_ndelay = ndelay;
-				sdebug_jdelay = ndelay  ? JDELAY_OVERRIDDEN
-							: DEF_JDELAY;
-			}
-			block_unblock_all_queues(false);
-			mutex_unlock(&sdebug_host_list_mutex);
-		}
-		return res;
-	}
-	return -EINVAL;
-}
-static DRIVER_ATTR_RW(ndelay);
-
-static ssize_t opts_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "0x%x\n", sdebug_opts);
-}
-
-static ssize_t opts_store(struct device_driver *ddp, const char *buf,
-			  size_t count)
-{
-	int opts;
-	char work[20];
-
-	if (sscanf(buf, "%10s", work) == 1) {
-		if (strncasecmp(work, "0x", 2) == 0) {
-			if (kstrtoint(work + 2, 16, &opts) == 0)
-				goto opts_done;
-		} else {
-			if (kstrtoint(work, 10, &opts) == 0)
-				goto opts_done;
-		}
-	}
-	return -EINVAL;
-opts_done:
-	sdebug_opts = opts;
-	sdebug_verbose = !!(SDEBUG_OPT_NOISE & opts);
-	sdebug_any_injecting_opt = !!(SDEBUG_OPT_ALL_INJECTING & opts);
-	tweak_cmnd_count();
-	return count;
-}
-static DRIVER_ATTR_RW(opts);
-
-static ssize_t ptype_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_ptype);
-}
-static ssize_t ptype_store(struct device_driver *ddp, const char *buf,
-			   size_t count)
-{
-	int n;
-
-	/* Cannot change from or to TYPE_ZBC with sysfs */
-	if (sdebug_ptype == TYPE_ZBC)
-		return -EINVAL;
-
-	if ((count > 0) && (1 == sscanf(buf, "%d", &n)) && (n >= 0)) {
-		if (n == TYPE_ZBC)
-			return -EINVAL;
-		sdebug_ptype = n;
-		return count;
-	}
-	return -EINVAL;
-}
-static DRIVER_ATTR_RW(ptype);
-
-static ssize_t dsense_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_dsense);
-}
-static ssize_t dsense_store(struct device_driver *ddp, const char *buf,
-			    size_t count)
-{
-	int n;
-
-	if ((count > 0) && (1 == sscanf(buf, "%d", &n)) && (n >= 0)) {
-		sdebug_dsense = n;
-		return count;
-	}
-	return -EINVAL;
-}
-static DRIVER_ATTR_RW(dsense);
-
-static ssize_t fake_rw_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_fake_rw);
-}
-static ssize_t fake_rw_store(struct device_driver *ddp, const char *buf,
-			     size_t count)
-{
-	int n, idx;
-
-	if ((count > 0) && (1 == sscanf(buf, "%d", &n)) && (n >= 0)) {
-		bool want_store = (n == 0);
-		struct sdebug_host_info *sdhp;
-
-		n = (n > 0);
-		sdebug_fake_rw = (sdebug_fake_rw > 0);
-		if (sdebug_fake_rw == n)
-			return count;	/* not transitioning so do nothing */
-
-		if (want_store) {	/* 1 --> 0 transition, set up store */
-			if (sdeb_first_idx < 0) {
-				idx = sdebug_add_store();
-				if (idx < 0)
-					return idx;
-			} else {
-				idx = sdeb_first_idx;
-				xa_clear_mark(per_store_ap, idx,
-					      SDEB_XA_NOT_IN_USE);
-			}
-			/* make all hosts use same store */
-			list_for_each_entry(sdhp, &sdebug_host_list,
-					    host_list) {
-				if (sdhp->si_idx != idx) {
-					xa_set_mark(per_store_ap, sdhp->si_idx,
-						    SDEB_XA_NOT_IN_USE);
-					sdhp->si_idx = idx;
-				}
-			}
-			sdeb_most_recent_idx = idx;
-		} else {	/* 0 --> 1 transition is trigger for shrink */
-			sdebug_erase_all_stores(true /* apart from first */);
-		}
-		sdebug_fake_rw = n;
-		return count;
-	}
-	return -EINVAL;
-}
-static DRIVER_ATTR_RW(fake_rw);
-
-static ssize_t no_lun_0_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_no_lun_0);
-}
-static ssize_t no_lun_0_store(struct device_driver *ddp, const char *buf,
-			      size_t count)
-{
-	int n;
-
-	if ((count > 0) && (1 == sscanf(buf, "%d", &n)) && (n >= 0)) {
-		sdebug_no_lun_0 = n;
-		return count;
-	}
-	return -EINVAL;
-}
-static DRIVER_ATTR_RW(no_lun_0);
-
-static ssize_t num_tgts_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_num_tgts);
-}
-static ssize_t num_tgts_store(struct device_driver *ddp, const char *buf,
-			      size_t count)
-{
-	int n;
-
-	if ((count > 0) && (1 == sscanf(buf, "%d", &n)) && (n >= 0)) {
-		sdebug_num_tgts = n;
-		sdebug_max_tgts_luns();
-		return count;
-	}
-	return -EINVAL;
-}
-static DRIVER_ATTR_RW(num_tgts);
-
-static ssize_t dev_size_mb_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_dev_size_mb);
-}
-static DRIVER_ATTR_RO(dev_size_mb);
-
-static ssize_t per_host_store_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_per_host_store);
-}
-
-static ssize_t per_host_store_store(struct device_driver *ddp, const char *buf,
-				    size_t count)
-{
-	bool v;
-
-	if (kstrtobool(buf, &v))
-		return -EINVAL;
-
-	sdebug_per_host_store = v;
-	return count;
-}
-static DRIVER_ATTR_RW(per_host_store);
-
-static ssize_t num_parts_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_num_parts);
-}
-static DRIVER_ATTR_RO(num_parts);
-
-static ssize_t every_nth_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_every_nth);
-}
-static ssize_t every_nth_store(struct device_driver *ddp, const char *buf,
-			       size_t count)
-{
-	int nth;
-	char work[20];
-
-	if (sscanf(buf, "%10s", work) == 1) {
-		if (strncasecmp(work, "0x", 2) == 0) {
-			if (kstrtoint(work + 2, 16, &nth) == 0)
-				goto every_nth_done;
-		} else {
-			if (kstrtoint(work, 10, &nth) == 0)
-				goto every_nth_done;
-		}
-	}
-	return -EINVAL;
-
-every_nth_done:
-	sdebug_every_nth = nth;
-	if (nth && !sdebug_statistics) {
-		pr_info("every_nth needs statistics=1, set it\n");
-		sdebug_statistics = true;
-	}
-	tweak_cmnd_count();
-	return count;
-}
-static DRIVER_ATTR_RW(every_nth);
-
-static ssize_t lun_format_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", (int)sdebug_lun_am);
-}
-static ssize_t lun_format_store(struct device_driver *ddp, const char *buf,
-				size_t count)
-{
-	int n;
-	bool changed;
-
-	if (kstrtoint(buf, 0, &n))
-		return -EINVAL;
-	if (n >= 0) {
-		if (n > (int)SAM_LUN_AM_FLAT) {
-			pr_warn("only LUN address methods 0 and 1 are supported\n");
-			return -EINVAL;
-		}
-		changed = ((int)sdebug_lun_am != n);
-		sdebug_lun_am = n;
-		if (changed && sdebug_scsi_level >= 5) {	/* >= SPC-3 */
-			struct sdebug_host_info *sdhp;
-			struct sdebug_dev_info *dp;
-
-			mutex_lock(&sdebug_host_list_mutex);
-			list_for_each_entry(sdhp, &sdebug_host_list, host_list) {
-				list_for_each_entry(dp, &sdhp->dev_info_list, dev_list) {
-					set_bit(SDEBUG_UA_LUNS_CHANGED, dp->uas_bm);
-				}
-			}
-			mutex_unlock(&sdebug_host_list_mutex);
-		}
-		return count;
-	}
-	return -EINVAL;
-}
-static DRIVER_ATTR_RW(lun_format);
-
-static ssize_t max_luns_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_max_luns);
-}
-static ssize_t max_luns_store(struct device_driver *ddp, const char *buf,
-			      size_t count)
-{
-	int n;
-	bool changed;
-
-	if ((count > 0) && (1 == sscanf(buf, "%d", &n)) && (n >= 0)) {
-		if (n > 256) {
-			pr_warn("max_luns can be no more than 256\n");
-			return -EINVAL;
-		}
-		changed = (sdebug_max_luns != n);
-		sdebug_max_luns = n;
-		sdebug_max_tgts_luns();
-		if (changed && (sdebug_scsi_level >= 5)) {	/* >= SPC-3 */
-			struct sdebug_host_info *sdhp;
-			struct sdebug_dev_info *dp;
-
-			mutex_lock(&sdebug_host_list_mutex);
-			list_for_each_entry(sdhp, &sdebug_host_list,
-					    host_list) {
-				list_for_each_entry(dp, &sdhp->dev_info_list,
-						    dev_list) {
-					set_bit(SDEBUG_UA_LUNS_CHANGED,
-						dp->uas_bm);
-				}
-			}
-			mutex_unlock(&sdebug_host_list_mutex);
-		}
-		return count;
-	}
-	return -EINVAL;
-}
-static DRIVER_ATTR_RW(max_luns);
-
-static ssize_t max_queue_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_max_queue);
-}
-/* N.B. max_queue can be changed while there are queued commands. In flight
- * commands beyond the new max_queue will be completed. */
-static ssize_t max_queue_store(struct device_driver *ddp, const char *buf,
-			       size_t count)
-{
-	int n;
-
-	if ((count > 0) && (1 == sscanf(buf, "%d", &n)) && (n > 0) &&
-	    (n <= SDEBUG_CANQUEUE) &&
-	    (sdebug_host_max_queue == 0)) {
-		mutex_lock(&sdebug_host_list_mutex);
-
-		/* We may only change sdebug_max_queue when we have no shosts */
-		if (list_empty(&sdebug_host_list))
-			sdebug_max_queue = n;
-		else
-			count = -EBUSY;
-		mutex_unlock(&sdebug_host_list_mutex);
-		return count;
-	}
-	return -EINVAL;
-}
-static DRIVER_ATTR_RW(max_queue);
-
-static ssize_t host_max_queue_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_host_max_queue);
-}
-
-static ssize_t no_rwlock_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_no_rwlock);
-}
-
-static ssize_t no_rwlock_store(struct device_driver *ddp, const char *buf, size_t count)
-{
-	bool v;
-
-	if (kstrtobool(buf, &v))
-		return -EINVAL;
-
-	sdebug_no_rwlock = v;
-	return count;
-}
-static DRIVER_ATTR_RW(no_rwlock);
-
-/*
- * Since this is used for .can_queue, and we get the hc_idx tag from the bitmap
- * in range [0, sdebug_host_max_queue), we can't change it.
- */
-static DRIVER_ATTR_RO(host_max_queue);
-
-static ssize_t no_uld_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_no_uld);
-}
-static DRIVER_ATTR_RO(no_uld);
-
-static ssize_t scsi_level_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_scsi_level);
-}
-static DRIVER_ATTR_RO(scsi_level);
-
-static ssize_t virtual_gb_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_virtual_gb);
-}
-static ssize_t virtual_gb_store(struct device_driver *ddp, const char *buf,
-				size_t count)
-{
-	int n;
-	bool changed;
-
-	/* Ignore capacity change for ZBC drives for now */
-	if (sdeb_zbc_in_use)
-		return -ENOTSUPP;
-
-	if ((count > 0) && (1 == sscanf(buf, "%d", &n)) && (n >= 0)) {
-		changed = (sdebug_virtual_gb != n);
-		sdebug_virtual_gb = n;
-		sdebug_capacity = get_sdebug_capacity();
-		if (changed) {
-			struct sdebug_host_info *sdhp;
-			struct sdebug_dev_info *dp;
-
-			mutex_lock(&sdebug_host_list_mutex);
-			list_for_each_entry(sdhp, &sdebug_host_list,
-					    host_list) {
-				list_for_each_entry(dp, &sdhp->dev_info_list,
-						    dev_list) {
-					set_bit(SDEBUG_UA_CAPACITY_CHANGED,
-						dp->uas_bm);
-				}
-			}
-			mutex_unlock(&sdebug_host_list_mutex);
-		}
-		return count;
-	}
-	return -EINVAL;
-}
-static DRIVER_ATTR_RW(virtual_gb);
-
-static ssize_t add_host_show(struct device_driver *ddp, char *buf)
-{
-	/* absolute number of hosts currently active is what is shown */
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_num_hosts);
-}
-
-static ssize_t add_host_store(struct device_driver *ddp, const char *buf,
-			      size_t count)
-{
-	bool found;
-	unsigned long idx;
-	struct sdeb_store_info *sip;
-	bool want_phs = (sdebug_fake_rw == 0) && sdebug_per_host_store;
-	int delta_hosts;
-
-	if (sscanf(buf, "%d", &delta_hosts) != 1)
-		return -EINVAL;
-	if (delta_hosts > 0) {
-		do {
-			found = false;
-			if (want_phs) {
-				xa_for_each_marked(per_store_ap, idx, sip,
-						   SDEB_XA_NOT_IN_USE) {
-					sdeb_most_recent_idx = (int)idx;
-					found = true;
-					break;
-				}
-				if (found)	/* re-use case */
-					sdebug_add_host_helper((int)idx);
-				else
-					sdebug_do_add_host(true);
-			} else {
-				sdebug_do_add_host(false);
-			}
-		} while (--delta_hosts);
-	} else if (delta_hosts < 0) {
-		do {
-			sdebug_do_remove_host(false);
-		} while (++delta_hosts);
-	}
-	return count;
-}
-static DRIVER_ATTR_RW(add_host);
-
-static ssize_t vpd_use_hostno_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_vpd_use_hostno);
-}
-static ssize_t vpd_use_hostno_store(struct device_driver *ddp, const char *buf,
-				    size_t count)
-{
-	int n;
-
-	if ((count > 0) && (1 == sscanf(buf, "%d", &n)) && (n >= 0)) {
-		sdebug_vpd_use_hostno = n;
-		return count;
-	}
-	return -EINVAL;
-}
-static DRIVER_ATTR_RW(vpd_use_hostno);
-
-static ssize_t statistics_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", (int)sdebug_statistics);
-}
-static ssize_t statistics_store(struct device_driver *ddp, const char *buf,
-				size_t count)
-{
-	int n;
-
-	if ((count > 0) && (sscanf(buf, "%d", &n) == 1) && (n >= 0)) {
-		if (n > 0)
-			sdebug_statistics = true;
-		else {
-			clear_queue_stats();
-			sdebug_statistics = false;
-		}
-		return count;
-	}
-	return -EINVAL;
-}
-static DRIVER_ATTR_RW(statistics);
-
-static ssize_t sector_size_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%u\n", sdebug_sector_size);
-}
-static DRIVER_ATTR_RO(sector_size);
-
-static ssize_t submit_queues_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", submit_queues);
-}
-static DRIVER_ATTR_RO(submit_queues);
-
-static ssize_t dix_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_dix);
-}
-static DRIVER_ATTR_RO(dix);
-
-static ssize_t dif_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_dif);
-}
-static DRIVER_ATTR_RO(dif);
-
-static ssize_t guard_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%u\n", sdebug_guard);
-}
-static DRIVER_ATTR_RO(guard);
-
-static ssize_t ato_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_ato);
-}
-static DRIVER_ATTR_RO(ato);
-
-static ssize_t map_show(struct device_driver *ddp, char *buf)
-{
-	ssize_t count = 0;
-
-	if (!scsi_debug_lbp())
-		return scnprintf(buf, PAGE_SIZE, "0-%u\n",
-				 sdebug_store_sectors);
-
-	if (sdebug_fake_rw == 0 && !xa_empty(per_store_ap)) {
-		struct sdeb_store_info *sip = xa_load(per_store_ap, 0);
-
-		if (sip)
-			count = scnprintf(buf, PAGE_SIZE - 1, "%*pbl",
-					  (int)map_size, sip->map_storep);
-	}
-	buf[count++] = '\n';
-	buf[count] = '\0';
-
-	return count;
-}
-static DRIVER_ATTR_RO(map);
-
-static ssize_t random_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_random);
-}
-
-static ssize_t random_store(struct device_driver *ddp, const char *buf,
-			    size_t count)
-{
-	bool v;
-
-	if (kstrtobool(buf, &v))
-		return -EINVAL;
-
-	sdebug_random = v;
-	return count;
-}
-static DRIVER_ATTR_RW(random);
-
-static ssize_t removable_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_removable ? 1 : 0);
-}
-static ssize_t removable_store(struct device_driver *ddp, const char *buf,
-			       size_t count)
-{
-	int n;
-
-	if ((count > 0) && (1 == sscanf(buf, "%d", &n)) && (n >= 0)) {
-		sdebug_removable = (n > 0);
-		return count;
-	}
-	return -EINVAL;
-}
-static DRIVER_ATTR_RW(removable);
-
-static ssize_t host_lock_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", !!sdebug_host_lock);
-}
-/* N.B. sdebug_host_lock does nothing, kept for backward compatibility */
-static ssize_t host_lock_store(struct device_driver *ddp, const char *buf,
-			       size_t count)
-{
-	int n;
-
-	if ((count > 0) && (1 == sscanf(buf, "%d", &n)) && (n >= 0)) {
-		sdebug_host_lock = (n > 0);
-		return count;
-	}
-	return -EINVAL;
-}
-static DRIVER_ATTR_RW(host_lock);
-
-static ssize_t strict_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", !!sdebug_strict);
-}
-static ssize_t strict_store(struct device_driver *ddp, const char *buf,
-			    size_t count)
-{
-	int n;
-
-	if ((count > 0) && (1 == sscanf(buf, "%d", &n)) && (n >= 0)) {
-		sdebug_strict = (n > 0);
-		return count;
-	}
-	return -EINVAL;
-}
-static DRIVER_ATTR_RW(strict);
-
-static ssize_t uuid_ctl_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", !!sdebug_uuid_ctl);
-}
-static DRIVER_ATTR_RO(uuid_ctl);
-
-static ssize_t cdb_len_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdebug_cdb_len);
-}
-static ssize_t cdb_len_store(struct device_driver *ddp, const char *buf,
-			     size_t count)
-{
-	int ret, n;
-
-	ret = kstrtoint(buf, 0, &n);
-	if (ret)
-		return ret;
-	sdebug_cdb_len = n;
-	all_config_cdb_len();
-	return count;
-}
-static DRIVER_ATTR_RW(cdb_len);
-
-static const char * const zbc_model_strs_a[] = {
-	[BLK_ZONED_NONE] = "none",
-	[BLK_ZONED_HA]   = "host-aware",
-	[BLK_ZONED_HM]   = "host-managed",
-};
-
-static const char * const zbc_model_strs_b[] = {
-	[BLK_ZONED_NONE] = "no",
-	[BLK_ZONED_HA]   = "aware",
-	[BLK_ZONED_HM]   = "managed",
-};
-
-static const char * const zbc_model_strs_c[] = {
-	[BLK_ZONED_NONE] = "0",
-	[BLK_ZONED_HA]   = "1",
-	[BLK_ZONED_HM]   = "2",
-};
-
-static int sdeb_zbc_model_str(const char *cp)
-{
-	int res = sysfs_match_string(zbc_model_strs_a, cp);
-
-	if (res < 0) {
-		res = sysfs_match_string(zbc_model_strs_b, cp);
-		if (res < 0) {
-			res = sysfs_match_string(zbc_model_strs_c, cp);
-			if (res < 0)
-				return -EINVAL;
-		}
-	}
-	return res;
-}
-
-static ssize_t zbc_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%s\n",
-			 zbc_model_strs_a[sdeb_zbc_model]);
-}
-static DRIVER_ATTR_RO(zbc);
-
-static ssize_t tur_ms_to_ready_show(struct device_driver *ddp, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", sdeb_tur_ms_to_ready);
-}
-static DRIVER_ATTR_RO(tur_ms_to_ready);
-
-/* Note: The following array creates attribute files in the
-   /sys/bus/pseudo/drivers/scsi_debug directory. The advantage of these
-   files (over those found in the /sys/module/scsi_debug/parameters
-   directory) is that auxiliary actions can be triggered when an attribute
-   is changed. For example see: add_host_store() above.
- */
-
-static struct attribute *sdebug_drv_attrs[] = {
-	&driver_attr_delay.attr,
-	&driver_attr_opts.attr,
-	&driver_attr_ptype.attr,
-	&driver_attr_dsense.attr,
-	&driver_attr_fake_rw.attr,
-	&driver_attr_host_max_queue.attr,
-	&driver_attr_no_lun_0.attr,
-	&driver_attr_num_tgts.attr,
-	&driver_attr_dev_size_mb.attr,
-	&driver_attr_num_parts.attr,
-	&driver_attr_every_nth.attr,
-	&driver_attr_lun_format.attr,
-	&driver_attr_max_luns.attr,
-	&driver_attr_max_queue.attr,
-	&driver_attr_no_rwlock.attr,
-	&driver_attr_no_uld.attr,
-	&driver_attr_scsi_level.attr,
-	&driver_attr_virtual_gb.attr,
-	&driver_attr_add_host.attr,
-	&driver_attr_per_host_store.attr,
-	&driver_attr_vpd_use_hostno.attr,
-	&driver_attr_sector_size.attr,
-	&driver_attr_statistics.attr,
-	&driver_attr_submit_queues.attr,
-	&driver_attr_dix.attr,
-	&driver_attr_dif.attr,
-	&driver_attr_guard.attr,
-	&driver_attr_ato.attr,
-	&driver_attr_map.attr,
-	&driver_attr_random.attr,
-	&driver_attr_removable.attr,
-	&driver_attr_host_lock.attr,
-	&driver_attr_ndelay.attr,
-	&driver_attr_strict.attr,
-	&driver_attr_uuid_ctl.attr,
-	&driver_attr_cdb_len.attr,
-	&driver_attr_tur_ms_to_ready.attr,
-	&driver_attr_zbc.attr,
-	NULL,
-};
-ATTRIBUTE_GROUPS(sdebug_drv);
-
-static struct device *pseudo_primary;
-
-static int __init scsi_debug_init(void)
-{
-	bool want_store = (sdebug_fake_rw == 0);
-	unsigned long sz;
-	int k, ret, hosts_to_add;
-	int idx = -1;
-
-	ramdisk_lck_a[0] = &atomic_rw;
-	ramdisk_lck_a[1] = &atomic_rw2;
-
-	if (sdebug_ndelay >= 1000 * 1000 * 1000) {
-		pr_warn("ndelay must be less than 1 second, ignored\n");
-		sdebug_ndelay = 0;
-	} else if (sdebug_ndelay > 0)
-		sdebug_jdelay = JDELAY_OVERRIDDEN;
-
-	switch (sdebug_sector_size) {
-	case  512:
-	case 1024:
-	case 2048:
-	case 4096:
-		break;
-	default:
-		pr_err("invalid sector_size %d\n", sdebug_sector_size);
-		return -EINVAL;
-	}
-
-	switch (sdebug_dif) {
-	case T10_PI_TYPE0_PROTECTION:
-		break;
-	case T10_PI_TYPE1_PROTECTION:
-	case T10_PI_TYPE2_PROTECTION:
-	case T10_PI_TYPE3_PROTECTION:
-		have_dif_prot = true;
-		break;
-
-	default:
-		pr_err("dif must be 0, 1, 2 or 3\n");
-		return -EINVAL;
-	}
-
-	if (sdebug_num_tgts < 0) {
-		pr_err("num_tgts must be >= 0\n");
-		return -EINVAL;
-	}
-
-	if (sdebug_guard > 1) {
-		pr_err("guard must be 0 or 1\n");
-		return -EINVAL;
-	}
-
-	if (sdebug_ato > 1) {
-		pr_err("ato must be 0 or 1\n");
-		return -EINVAL;
-	}
-
-	if (sdebug_physblk_exp > 15) {
-		pr_err("invalid physblk_exp %u\n", sdebug_physblk_exp);
-		return -EINVAL;
-	}
-
-	sdebug_lun_am = sdebug_lun_am_i;
-	if (sdebug_lun_am > SAM_LUN_AM_FLAT) {
-		pr_warn("Invalid LUN format %u, using default\n", (int)sdebug_lun_am);
-		sdebug_lun_am = SAM_LUN_AM_PERIPHERAL;
-	}
-
-	if (sdebug_max_luns > 256) {
-		if (sdebug_max_luns > 16384) {
-			pr_warn("max_luns can be no more than 16384, use default\n");
-			sdebug_max_luns = DEF_MAX_LUNS;
-		}
-		sdebug_lun_am = SAM_LUN_AM_FLAT;
-	}
-
-	if (sdebug_lowest_aligned > 0x3fff) {
-		pr_err("lowest_aligned too big: %u\n", sdebug_lowest_aligned);
-		return -EINVAL;
-	}
-
-	if (submit_queues < 1) {
-		pr_err("submit_queues must be 1 or more\n");
-		return -EINVAL;
-	}
-
-	if ((sdebug_max_queue > SDEBUG_CANQUEUE) || (sdebug_max_queue < 1)) {
-		pr_err("max_queue must be in range [1, %d]\n", SDEBUG_CANQUEUE);
-		return -EINVAL;
-	}
-
-	if ((sdebug_host_max_queue > SDEBUG_CANQUEUE) ||
-	    (sdebug_host_max_queue < 0)) {
-		pr_err("host_max_queue must be in range [0 %d]\n",
-		       SDEBUG_CANQUEUE);
-		return -EINVAL;
-	}
-
-	if (sdebug_host_max_queue &&
-	    (sdebug_max_queue != sdebug_host_max_queue)) {
-		sdebug_max_queue = sdebug_host_max_queue;
-		pr_warn("fixing max submit queue depth to host max queue depth, %d\n",
-			sdebug_max_queue);
-	}
-
-	/*
-	 * check for host managed zoned block device specified with
-	 * ptype=0x14 or zbc=XXX.
-	 */
-	if (sdebug_ptype == TYPE_ZBC) {
-		sdeb_zbc_model = BLK_ZONED_HM;
-	} else if (sdeb_zbc_model_s && *sdeb_zbc_model_s) {
-		k = sdeb_zbc_model_str(sdeb_zbc_model_s);
-		if (k < 0)
-			return k;
-		sdeb_zbc_model = k;
-		switch (sdeb_zbc_model) {
-		case BLK_ZONED_NONE:
-		case BLK_ZONED_HA:
-			sdebug_ptype = TYPE_DISK;
-			break;
-		case BLK_ZONED_HM:
-			sdebug_ptype = TYPE_ZBC;
-			break;
-		default:
-			pr_err("Invalid ZBC model\n");
-			return -EINVAL;
-		}
-	}
-	if (sdeb_zbc_model != BLK_ZONED_NONE) {
-		sdeb_zbc_in_use = true;
-		if (sdebug_dev_size_mb == DEF_DEV_SIZE_PRE_INIT)
-			sdebug_dev_size_mb = DEF_ZBC_DEV_SIZE_MB;
-	}
-
-	if (sdebug_dev_size_mb == DEF_DEV_SIZE_PRE_INIT)
-		sdebug_dev_size_mb = DEF_DEV_SIZE_MB;
-	if (sdebug_dev_size_mb < 1)
-		sdebug_dev_size_mb = 1;  /* force minimum 1 MB ramdisk */
-	sz = (unsigned long)sdebug_dev_size_mb * 1048576;
-	sdebug_store_sectors = sz / sdebug_sector_size;
-	sdebug_capacity = get_sdebug_capacity();
-
-	/* play around with geometry, don't waste too much on track 0 */
-	sdebug_heads = 8;
-	sdebug_sectors_per = 32;
-	if (sdebug_dev_size_mb >= 256)
-		sdebug_heads = 64;
-	else if (sdebug_dev_size_mb >= 16)
-		sdebug_heads = 32;
-	sdebug_cylinders_per = (unsigned long)sdebug_capacity /
-			       (sdebug_sectors_per * sdebug_heads);
-	if (sdebug_cylinders_per >= 1024) {
-		/* other LLDs do this; implies >= 1GB ram disk ... */
-		sdebug_heads = 255;
-		sdebug_sectors_per = 63;
-		sdebug_cylinders_per = (unsigned long)sdebug_capacity /
-			       (sdebug_sectors_per * sdebug_heads);
-	}
-	if (scsi_debug_lbp()) {
-		sdebug_unmap_max_blocks =
-			clamp(sdebug_unmap_max_blocks, 0U, 0xffffffffU);
-
-		sdebug_unmap_max_desc =
-			clamp(sdebug_unmap_max_desc, 0U, 256U);
-
-		sdebug_unmap_granularity =
-			clamp(sdebug_unmap_granularity, 1U, 0xffffffffU);
-
-		if (sdebug_unmap_alignment &&
-		    sdebug_unmap_granularity <=
-		    sdebug_unmap_alignment) {
-			pr_err("ERR: unmap_granularity <= unmap_alignment\n");
-			return -EINVAL;
-		}
-	}
-	xa_init_flags(per_store_ap, XA_FLAGS_ALLOC | XA_FLAGS_LOCK_IRQ);
-	if (want_store) {
-		idx = sdebug_add_store();
-		if (idx < 0)
-			return idx;
-	}
-
-	pseudo_primary = root_device_register("pseudo_0");
-	if (IS_ERR(pseudo_primary)) {
-		pr_warn("root_device_register() error\n");
-		ret = PTR_ERR(pseudo_primary);
-		goto free_vm;
-	}
-	ret = bus_register(&pseudo_lld_bus);
-	if (ret < 0) {
-		pr_warn("bus_register error: %d\n", ret);
-		goto dev_unreg;
-	}
-	ret = driver_register(&sdebug_driverfs_driver);
-	if (ret < 0) {
-		pr_warn("driver_register error: %d\n", ret);
-		goto bus_unreg;
-	}
-
-	hosts_to_add = sdebug_add_host;
-	sdebug_add_host = 0;
-
-	queued_cmd_cache = KMEM_CACHE(sdebug_queued_cmd, SLAB_HWCACHE_ALIGN);
-	if (!queued_cmd_cache) {
-		ret = -ENOMEM;
-		goto driver_unreg;
-	}
-
-	for (k = 0; k < hosts_to_add; k++) {
-		if (want_store && k == 0) {
-			ret = sdebug_add_host_helper(idx);
-			if (ret < 0) {
-				pr_err("add_host_helper k=%d, error=%d\n",
-				       k, -ret);
-				break;
-			}
-		} else {
-			ret = sdebug_do_add_host(want_store &&
-						 sdebug_per_host_store);
-			if (ret < 0) {
-				pr_err("add_host k=%d error=%d\n", k, -ret);
-				break;
-			}
-		}
-	}
-	if (sdebug_verbose)
-		pr_info("built %d host(s)\n", sdebug_num_hosts);
-
-	return 0;
-
-driver_unreg:
-	driver_unregister(&sdebug_driverfs_driver);
-bus_unreg:
-	bus_unregister(&pseudo_lld_bus);
-dev_unreg:
-	root_device_unregister(pseudo_primary);
-free_vm:
-	sdebug_erase_store(idx, NULL);
-	return ret;
-}
-
-static void __exit scsi_debug_exit(void)
-{
-	int k = sdebug_num_hosts;
-
-	for (; k; k--)
-		sdebug_do_remove_host(true);
-	kmem_cache_destroy(queued_cmd_cache);
-	driver_unregister(&sdebug_driverfs_driver);
-	bus_unregister(&pseudo_lld_bus);
-	root_device_unregister(pseudo_primary);
-
-	sdebug_erase_all_stores(false);
-	xa_destroy(per_store_ap);
-}
-
-device_initcall(scsi_debug_init);
-module_exit(scsi_debug_exit);
-
-static void sdebug_release_adapter(struct device *dev)
-{
-	struct sdebug_host_info *sdbg_host;
-
-	sdbg_host = dev_to_sdebug_host(dev);
-	kfree(sdbg_host);
-}
-
-/* idx must be valid, if sip is NULL then it will be obtained using idx */
-static void sdebug_erase_store(int idx, struct sdeb_store_info *sip)
-{
-	if (idx < 0)
-		return;
-	if (!sip) {
-		if (xa_empty(per_store_ap))
-			return;
-		sip = xa_load(per_store_ap, idx);
-		if (!sip)
-			return;
-	}
-	vfree(sip->map_storep);
-	vfree(sip->dif_storep);
-	vfree(sip->storep);
-	xa_erase(per_store_ap, idx);
-	kfree(sip);
-}
-
-/* Assume apart_from_first==false only in shutdown case. */
-static void sdebug_erase_all_stores(bool apart_from_first)
-{
-	unsigned long idx;
-	struct sdeb_store_info *sip = NULL;
-
-	xa_for_each(per_store_ap, idx, sip) {
-		if (apart_from_first)
-			apart_from_first = false;
-		else
-			sdebug_erase_store(idx, sip);
-	}
-	if (apart_from_first)
-		sdeb_most_recent_idx = sdeb_first_idx;
-}
-
-/*
- * Returns store xarray new element index (idx) if >=0 else negated errno.
- * Limit the number of stores to 65536.
- */
-static int sdebug_add_store(void)
-{
-	int res;
-	u32 n_idx;
-	unsigned long iflags;
-	unsigned long sz = (unsigned long)sdebug_dev_size_mb * 1048576;
-	struct sdeb_store_info *sip = NULL;
-	struct xa_limit xal = { .max = 1 << 16, .min = 0 };
-
-	sip = kzalloc(sizeof(*sip), GFP_KERNEL);
-	if (!sip)
-		return -ENOMEM;
-
-	xa_lock_irqsave(per_store_ap, iflags);
-	res = __xa_alloc(per_store_ap, &n_idx, sip, xal, GFP_ATOMIC);
-	if (unlikely(res < 0)) {
-		xa_unlock_irqrestore(per_store_ap, iflags);
-		kfree(sip);
-		pr_warn("%s: xa_alloc() errno=%d\n", __func__, -res);
-		return res;
-	}
-	sdeb_most_recent_idx = n_idx;
-	if (sdeb_first_idx < 0)
-		sdeb_first_idx = n_idx;
-	xa_unlock_irqrestore(per_store_ap, iflags);
-
-	res = -ENOMEM;
-	sip->storep = vzalloc(sz);
-	if (!sip->storep) {
-		pr_err("user data oom\n");
-		goto err;
-	}
-	if (sdebug_num_parts > 0)
-		sdebug_build_parts(sip->storep, sz);
-
-	/* DIF/DIX: what T10 calls Protection Information (PI) */
-	if (sdebug_dix) {
-		int dif_size;
-
-		dif_size = sdebug_store_sectors * sizeof(struct t10_pi_tuple);
-		sip->dif_storep = vmalloc(dif_size);
-
-		pr_info("dif_storep %u bytes @ %pK\n", dif_size,
-			sip->dif_storep);
-
-		if (!sip->dif_storep) {
-			pr_err("DIX oom\n");
-			goto err;
-		}
-		memset(sip->dif_storep, 0xff, dif_size);
-	}
-	/* Logical Block Provisioning */
-	if (scsi_debug_lbp()) {
-		map_size = lba_to_map_index(sdebug_store_sectors - 1) + 1;
-		sip->map_storep = vmalloc(array_size(sizeof(long),
-						     BITS_TO_LONGS(map_size)));
-
-		pr_info("%lu provisioning blocks\n", map_size);
-
-		if (!sip->map_storep) {
-			pr_err("LBP map oom\n");
-			goto err;
-		}
-
-		bitmap_zero(sip->map_storep, map_size);
-
-		/* Map first 1KB for partition table */
-		if (sdebug_num_parts)
-			map_region(sip, 0, 2);
-	}
-
-	rwlock_init(&sip->macc_lck);
-	return (int)n_idx;
-err:
-	sdebug_erase_store((int)n_idx, sip);
-	pr_warn("%s: failed, errno=%d\n", __func__, -res);
-	return res;
-}
-
-static int sdebug_add_host_helper(int per_host_idx)
-{
-	int k, devs_per_host, idx;
-	int error = -ENOMEM;
-	struct sdebug_host_info *sdbg_host;
-	struct sdebug_dev_info *sdbg_devinfo, *tmp;
-
-	sdbg_host = kzalloc(sizeof(*sdbg_host), GFP_KERNEL);
-	if (!sdbg_host)
-		return -ENOMEM;
-	idx = (per_host_idx < 0) ? sdeb_first_idx : per_host_idx;
-	if (xa_get_mark(per_store_ap, idx, SDEB_XA_NOT_IN_USE))
-		xa_clear_mark(per_store_ap, idx, SDEB_XA_NOT_IN_USE);
-	sdbg_host->si_idx = idx;
-
-	INIT_LIST_HEAD(&sdbg_host->dev_info_list);
-
-	devs_per_host = sdebug_num_tgts * sdebug_max_luns;
-	for (k = 0; k < devs_per_host; k++) {
-		sdbg_devinfo = sdebug_device_create(sdbg_host, GFP_KERNEL);
-		if (!sdbg_devinfo)
-			goto clean;
-	}
-
-	mutex_lock(&sdebug_host_list_mutex);
-	list_add_tail(&sdbg_host->host_list, &sdebug_host_list);
-	mutex_unlock(&sdebug_host_list_mutex);
-
-	sdbg_host->dev.bus = &pseudo_lld_bus;
-	sdbg_host->dev.parent = pseudo_primary;
-	sdbg_host->dev.release = &sdebug_release_adapter;
-	dev_set_name(&sdbg_host->dev, "adapter%d", sdebug_num_hosts);
-
-	error = device_register(&sdbg_host->dev);
-	if (error) {
-		mutex_lock(&sdebug_host_list_mutex);
-		list_del(&sdbg_host->host_list);
-		mutex_unlock(&sdebug_host_list_mutex);
-		goto clean;
-	}
-
-	++sdebug_num_hosts;
-	return 0;
-
-clean:
-	list_for_each_entry_safe(sdbg_devinfo, tmp, &sdbg_host->dev_info_list,
-				 dev_list) {
-		list_del(&sdbg_devinfo->dev_list);
-		kfree(sdbg_devinfo->zstate);
-		kfree(sdbg_devinfo);
-	}
-	if (sdbg_host->dev.release)
-		put_device(&sdbg_host->dev);
-	else
-		kfree(sdbg_host);
-	pr_warn("%s: failed, errno=%d\n", __func__, -error);
-	return error;
-}
-
-static int sdebug_do_add_host(bool mk_new_store)
-{
-	int ph_idx = sdeb_most_recent_idx;
-
-	if (mk_new_store) {
-		ph_idx = sdebug_add_store();
-		if (ph_idx < 0)
-			return ph_idx;
-	}
-	return sdebug_add_host_helper(ph_idx);
-}
-
-static void sdebug_do_remove_host(bool the_end)
-{
-	int idx = -1;
-	struct sdebug_host_info *sdbg_host = NULL;
-	struct sdebug_host_info *sdbg_host2;
-
-	mutex_lock(&sdebug_host_list_mutex);
-	if (!list_empty(&sdebug_host_list)) {
-		sdbg_host = list_entry(sdebug_host_list.prev,
-				       struct sdebug_host_info, host_list);
-		idx = sdbg_host->si_idx;
-	}
-	if (!the_end && idx >= 0) {
-		bool unique = true;
-
-		list_for_each_entry(sdbg_host2, &sdebug_host_list, host_list) {
-			if (sdbg_host2 == sdbg_host)
-				continue;
-			if (idx == sdbg_host2->si_idx) {
-				unique = false;
-				break;
-			}
-		}
-		if (unique) {
-			xa_set_mark(per_store_ap, idx, SDEB_XA_NOT_IN_USE);
-			if (idx == sdeb_most_recent_idx)
-				--sdeb_most_recent_idx;
-		}
-	}
-	if (sdbg_host)
-		list_del(&sdbg_host->host_list);
-	mutex_unlock(&sdebug_host_list_mutex);
-
-	if (!sdbg_host)
-		return;
-
-	device_unregister(&sdbg_host->dev);
-	--sdebug_num_hosts;
-}
-
-static int sdebug_change_qdepth(struct scsi_device *sdev, int qdepth)
-{
-	struct sdebug_dev_info *devip = sdev->hostdata;
 
 	if (!devip)
-		return	-ENODEV;
-
-	mutex_lock(&sdebug_host_list_mutex);
-	block_unblock_all_queues(true);
-
-	if (qdepth > SDEBUG_CANQUEUE) {
-		qdepth = SDEBUG_CANQUEUE;
-		pr_warn("%s: requested qdepth [%d] exceeds canqueue [%d], trim\n", __func__,
-			qdepth, SDEBUG_CANQUEUE);
-	}
-	if (qdepth < 1)
-		qdepth = 1;
-	if (qdepth != sdev->queue_depth)
-		scsi_change_queue_depth(sdev, qdepth);
-
-	block_unblock_all_queues(false);
-	mutex_unlock(&sdebug_host_list_mutex);
-
-	if (SDEBUG_OPT_Q_NOISE & sdebug_opts)
-		sdev_printk(KERN_INFO, sdev, "%s: qdepth=%d\n", __func__, qdepth);
-
-	return sdev->queue_depth;
-}
-
-static bool fake_timeout(struct scsi_cmnd *scp)
-{
-	if (0 == (atomic_read(&sdebug_cmnd_count) % abs(sdebug_every_nth))) {
-		if (sdebug_every_nth < -1)
-			sdebug_every_nth = -1;
-		if (SDEBUG_OPT_TIMEOUT & sdebug_opts)
-			return true; /* ignore command causing timeout */
-		else if (SDEBUG_OPT_MAC_TIMEOUT & sdebug_opts &&
-			 scsi_medium_access_command(scp))
-			return true; /* time out reads and writes */
-	}
-	return false;
-}
-
-/* Response to TUR or media access command when device stopped */
-static int resp_not_ready(struct scsi_cmnd *scp, struct sdebug_dev_info *devip)
-{
-	int stopped_state;
-	u64 diff_ns = 0;
-	ktime_t now_ts = ktime_get_boottime();
-	struct scsi_device *sdp = scp->device;
-
-	stopped_state = atomic_read(&devip->stopped);
-	if (stopped_state == 2) {
-		if (ktime_to_ns(now_ts) > ktime_to_ns(devip->create_ts)) {
-			diff_ns = ktime_to_ns(ktime_sub(now_ts, devip->create_ts));
-			if (diff_ns >= ((u64)sdeb_tur_ms_to_ready * 1000000)) {
-				/* tur_ms_to_ready timer extinguished */
-				atomic_set(&devip->stopped, 0);
-				return 0;
-			}
-		}
-		mk_sense_buffer(scp, NOT_READY, LOGICAL_UNIT_NOT_READY, 0x1);
-		if (sdebug_verbose)
-			sdev_printk(KERN_INFO, sdp,
-				    "%s: Not ready: in process of becoming ready\n", my_name);
-		if (scp->cmnd[0] == TEST_UNIT_READY) {
-			u64 tur_nanosecs_to_ready = (u64)sdeb_tur_ms_to_ready * 1000000;
-
-			if (diff_ns <= tur_nanosecs_to_ready)
-				diff_ns = tur_nanosecs_to_ready - diff_ns;
-			else
-				diff_ns = tur_nanosecs_to_ready;
-			/* As per 20-061r2 approved for spc6 by T10 on 20200716 */
-			do_div(diff_ns, 1000000);	/* diff_ns becomes milliseconds */
-			scsi_set_sense_information(scp->sense_buffer, SCSI_SENSE_BUFFERSIZE,
-						   diff_ns);
-			return check_condition_result;
-		}
-	}
-	mk_sense_buffer(scp, NOT_READY, LOGICAL_UNIT_NOT_READY, 0x2);
-	if (sdebug_verbose)
-		sdev_printk(KERN_INFO, sdp, "%s: Not ready: initializing command required\n",
-			    my_name);
-	return check_condition_result;
-}
-
-static void sdebug_map_queues(struct Scsi_Host *shost)
-{
-	int i, qoff;
-
-	if (shost->nr_hw_queues == 1)
 		return;
 
-	for (i = 0, qoff = 0; i < HCTX_MAX_TYPES; i++) {
-		struct blk_mq_queue_map *map = &shost->tag_set.map[i];
-
-		map->nr_queues  = 0;
-
-		if (i == HCTX_TYPE_DEFAULT)
-			map->nr_queues = submit_queues - poll_queues;
-		else if (i == HCTX_TYPE_POLL)
-			map->nr_queues = poll_queues;
-
-		if (!map->nr_queues) {
-			BUG_ON(i == HCTX_TYPE_DEFAULT);
-			continue;
-		}
-
-		map->queue_offset = qoff;
-		blk_mq_map_queues(map);
-
-		qoff += map->nr_queues;
+	spin_lock(&devip->list_lock);
+	list_for_each_entry_rcu(err, &devip->inject_err_list, list) {
+		list_del_rcu(&err->list);
+		call_rcu(&err->rcu, sdebug_err_free);
 	}
+	return devip;
 }
 
-struct sdebug_blk_mq_poll_data {
-	unsigned int queue_num;
-	int *num_entries;
-};
-
-/*
- * We don't handle aborted commands here, but it does not seem possible to have
- * aborted polled commands from schedule_resp()
- */
-static bool sdebug_blk_mq_poll_iter(struct request *rq, void *opaque)
-{
-	struct sdebug_blk_mq_poll_data *data = opaque;
-	struct scsi_cmnd *cmd = blk_mq_rq_to_pdu(rq);
-	struct sdebug_scsi_cmd *sdsc = scsi_cmd_priv(cmd);
-	struct sdebug_defer *sd_dp;
-	u32 unique_tag = blk_mq_unique_tag(rq);
-	u16 hwq = blk_mq_unique_tag_to_hwq(unique_tag);
-	struct sdebug_queued_cmd *sqcp;
-	unsigned long flags;
-	int queue_num = data->queue_num;
-	ktime_t time;
-
-	/* We're only interested in one queue for this iteration */
-	if (hwq != queue_num)
-		return true;
-
-	/* Subsequent checks would fail if this failed, but check anyway */
-	if (!test_bit(SCMD_STATE_INFLIGHT, &cmd->state))
-		return true;
-
-	time = ktime_get_boottime();
-
-	spin_lock_irqsave(&sdsc->lock, flags);
-	sqcp = TO_QUEUED_CMD(cmd);
-	if (!sqcp) {
-		spin_unlock_irqrestore(&sdsc->lock, flags);
-		return true;
-	}
-
-	sd_dp = &sqcp->sd_dp;
-	if (READ_ONCE(sd_dp->defer_t) != SDEB_DEFER_POLL) {
-		spin_unlock_irqrestore(&sdsc->lock, flags);
-		return true;
-	}
-
-	if (time < sd_dp->cmpl_ts) {
-		spin_unlock_irqrestore(&sdsc->lock, flags);
-		return true;
-	}
-
-	ASSIGN_QUEUED_CMD(cmd, NULL);
-	spin_unlock_irqrestore(&sdsc->lock, flags);
-
-	if (sdebug_statistics) {
-		atomic_inc(&sdebug_completions);
-		if (raw_smp_processor_id() != sd_dp->issuing_cpu)
-			atomic_inc(&sdebug_miss_cpus);
-	}
-
-	sdebug_free_queued_cmd(sqcp);
-
-	scsi_done(cmd); /* callback to mid level */
-	(*data->num_entries)++;
-	return true;
-}
-
-static int sdebug_blk_mq_poll(struct Scsi_Host *shost, unsigned int queue_num)
-{
-	int num_entries = 0;
-	struct sdebug_blk_mq_poll_data data = {
-		.queue_num = queue_num,
-		.num_entries = &num_entries,
-	};
-
-	blk_mq_tagset_busy_iter(&shost->tag_set, sdebug_blk_mq_poll_iter,
-				&data);
-
-	if (num_entries > 0)
-		atomic_add(num_entries, &sdeb_mq_poll_count);
-	return num_entries;
-}
-
-static int scsi_debug_queuecommand(struct Scsi_Host *shost,
-				   struct scsi_cmnd *scp)
-{
-	u8 sdeb_i;
-	struct scsi_device *sdp = scp->device;
-	const struct opcode_info_t *oip;
-	const struct opcode_info_t *r_oip;
-	struct sdebug_dev_info *devip;
-	u8 *cmd = scp->cmnd;
-	int (*r_pfp)(struct scsi_cmnd *, struct sdebug_dev_info *);
-	int (*pfp)(struct scsi_cmnd *, struct sdebug_dev_info *) = NULL;
-	int k, na;
-	int errsts = 0;
-	u64 lun_index = sdp->lun & 0x3FFF;
-	u32 flags;
-	u16 sa;
-	u8 opcode = cmd[0];
-	bool has_wlun_rl;
-	bool inject_now;
-
-	scsi_set_resid(scp, 0);
-	if (sdebug_statistics) {
-		atomic_inc(&sdebug_cmnd_count);
-		inject_now = inject_on_this_cmd();
-	} else {
-		inject_now = false;
-	}
-	if (unlikely(sdebug_verbose &&
-		     !(SDEBUG_OPT_NO_CDB_NOISE & sdebug_opts))) {
-		char b[120];
-		int n, len, sb;
-
-		len = scp->cmd_len;
-		sb = (int)sizeof(b);
-		if (len > 32)
-			strcpy(b, "too long, over 32 bytes");
-		else {
-			for (k = 0, n = 0; k < len && n < sb; ++k)
-				n += scnprintf(b + n, sb - n, "%02x ",
-					       (u32)cmd[k]);
-		}
-		sdev_printk(KERN_INFO, sdp, "%s: tag=%#x, cmd %s\n", my_name,
-			    blk_mq_unique_tag(scsi_cmd_to_rq(scp)), b);
-	}
-	if (unlikely(inject_now && (sdebug_opts & SDEBUG_OPT_HOST_BUSY)))
-		return SCSI_MLQUEUE_HOST_BUSY;
-	has_wlun_rl = (sdp->lun == SCSI_W_LUN_REPORT_LUNS);
-	if (unlikely(lun_index >= sdebug_max_luns && !has_wlun_rl))
-		goto err_out;
-
-	sdeb_i = opcode_ind_arr[opcode];	/* fully mapped */
-	oip = &opcode_info_arr[sdeb_i];		/* safe if table consistent */
-	devip = (struct sdebug_dev_info *)sdp->hostdata;
-	if (unlikely(!devip)) {
-		devip = find_build_dev_info(sdp);
-		if (NULL == devip)
-			goto err_out;
-	}
-	if (unlikely(inject_now && !atomic_read(&sdeb_inject_pending)))
-		atomic_set(&sdeb_inject_pending, 1);
-
-	na = oip->num_attached;
-	r_pfp = oip->pfp;
-	if (na) {	/* multiple commands with this opcode */
-		r_oip = oip;
-		if (FF_SA & r_oip->flags) {
-			if (F_SA_LOW & oip->flags)
-				sa = 0x1f & cmd[1];
-			else
-				sa = get_unaligned_be16(cmd + 8);
-			for (k = 0; k <= na; oip = r_oip->arrp + k++) {
-				if (opcode == oip->opcode && sa == oip->sa)
-					break;
-			}
-		} else {   /* since no service action only check opcode */
-			for (k = 0; k <= na; oip = r_oip->arrp + k++) {
-				if (opcode == oip->opcode)
-					break;
-			}
-		}
-		if (k > na) {
-			if (F_SA_LOW & r_oip->flags)
-				mk_sense_invalid_fld(scp, SDEB_IN_CDB, 1, 4);
-			else if (F_SA_HIGH & r_oip->flags)
-				mk_sense_invalid_fld(scp, SDEB_IN_CDB, 8, 7);
-			else
-				mk_sense_invalid_opcode(scp);
-			goto check_cond;
-		}
-	}	/* else (when na==0) we assume the oip is a match */
-	flags = oip->flags;
-	if (unlikely(F_INV_OP & flags)) {
-		mk_sense_invalid_opcode(scp);
-		goto check_cond;
-	}
-	if (unlikely(has_wlun_rl && !(F_RL_WLUN_OK & flags))) {
-		if (sdebug_verbose)
-			sdev_printk(KERN_INFO, sdp, "%s: Opcode 0x%x not%s\n",
-				    my_name, opcode, " supported for wlun");
-		mk_sense_invalid_opcode(scp);
-		goto check_cond;
-	}
-	if (unlikely(sdebug_strict)) {	/* check cdb against mask */
-		u8 rem;
-		int j;
-
-		for (k = 1; k < oip->len_mask[0] && k < 16; ++k) {
-			rem = ~oip->len_mask[k] & cmd[k];
-			if (rem) {
-				for (j = 7; j >= 0; --j, rem <<= 1) {
-					if (0x80 & rem)
-						break;
-				}
-				mk_sense_invalid_fld(scp, SDEB_IN_CDB, k, j);
-				goto check_cond;
-			}
-		}
-	}
-	if (unlikely(!(F_SKIP_UA & flags) &&
-		     find_first_bit(devip->uas_bm,
-				    SDEBUG_NUM_UAS) != SDEBUG_NUM_UAS)) {
-		errsts = make_ua(scp, devip);
-		if (errsts)
-			goto check_cond;
-	}
-	if (unlikely(((F_M_ACCESS & flags) || scp->cmnd[0] == TEST_UNIT_READY) &&
-		     atomic_read(&devip->stopped))) {
-		errsts = resp_not_ready(scp, devip);
-		if (errsts)
-			goto fini;
-	}
-	if (sdebug_fake_rw && (F_FAKE_RW & flags))
-		goto fini;
-	if (unlikely(sdebug_every_nth)) {
-		if (fake_timeout(scp))
-			return 0;	/* ignore command: make trouble */
-	}
-	if (likely(oip->pfp))
-		pfp = oip->pfp;	/* calls a resp_* function */
-	else
-		pfp = r_pfp;    /* if leaf function ptr NULL, try the root's */
-
-fini:
-	if (F_DELAY_OVERR & flags)	/* cmds like INQUIRY respond asap */
-		return schedule_resp(scp, devip, errsts, pfp, 0, 0);
-	else if ((flags & F_LONG_DELAY) && (sdebug_jdelay > 0 ||
-					    sdebug_ndelay > 10000)) {
-		/*
-		 * Skip long delays if ndelay <= 10 microseconds. Otherwise
-		 * for Start Stop Unit (SSU) want at least 1 second delay and
-		 * if sdebug_jdelay>1 want a long delay of that many seconds.
-		 * For Synchronize Cache want 1/20 of SSU's delay.
-		 */
-		int jdelay = (sdebug_jdelay < 2) ? 1 : sdebug_jdelay;
-		int denom = (flags & F_SYNC_DELAY) ? 20 : 1;
-
-		jdelay = mult_frac(USER_HZ * jdelay, HZ, denom * USER_HZ);
-		return schedule_resp(scp, devip, errsts, pfp, jdelay, 0);
-	} else
-		return schedule_resp(scp, devip, errsts, pfp, sdebug_jdelay,
-				     sdebug_ndelay);
-check_cond:
-	return schedule_resp(scp, devip, check_condition_result, NULL, 0, 0);
-err_out:
-	return schedule_resp(scp, NULL, DID_NO_CONNECT << 16, NULL, 0, 0);
-}
-
-static int sdebug_init_cmd_priv(struct Scsi_Host *shost, struct scsi_cmnd *cmd)
-{
-	struct sdebug_scsi_cmd *sdsc = scsi_cmd_priv(cmd);
-
-	spin_lock_init(&sdsc->lock);
-
-	return 0;
-}
-
-
-static struct scsi_host_template sdebug_driver_template = {
-	.show_info =		scsi_debug_show_info,
-	.write_info =		scsi_debug_write_info,
-	.proc_name =		sdebug_proc_name,
-	.name =			"SCSI DEBUG",
-	.info =			scsi_debug_info,
-	.slave_alloc =		scsi_debug_slave_alloc,
-	.slave_configure =	scsi_debug_slave_configure,
-	.slave_destroy =	scsi_debug_slave_destroy,
-	.ioctl =		scsi_debug_ioctl,
-	.queuecommand =		scsi_debug_queuecommand,
-	.change_queue_depth =	sdebug_change_qdepth,
-	.map_queues =		sdebug_map_queues,
-	.mq_poll =		sdebug_blk_mq_poll,
-	.eh_abort_handler =	scsi_debug_abort,
-	.eh_device_reset_handler = scsi_debug_device_reset,
-	.eh_target_reset_handler = scsi_debug_target_reset,
-	.eh_bus_reset_handler = scsi_debug_bus_reset,
-	.eh_host_reset_handler = scsi_debug_host_reset,
-	.can_queue =		SDEBUG_CANQUEUE,
-	.this_id =		7,
-	.sg_tablesize =		SG_MAX_SEGMENTS,
-	.cmd_per_lun =		DEF_CMD_PER_LUN,
-	.max_sectors =		-1U,
-	.max_segment_size =	-1U,
-	.module =		THIS_MODULE,
-	.track_queue_depth =	1,
-	.cmd_size = sizeof(struct sdebug_scsi_cmd),
-	.init_cmd_priv = sdebug_init_cmd_priv,
-};
-
-static int sdebug_driver_probe(struct device *dev)
-{
-	int error = 0;
-	struct sdebug_host_info *sdbg_host;
-	struct Scsi_Host *hpnt;
-	int hprot;
-
-	sdbg_host = dev_to_sdebug_host(dev);
-
-	sdebug_driver_template.can_queue = sdebug_max_queue;
-	sdebug_driver_template.cmd_per_lun = sdebug_max_queue;
-	if (!sdebug_clustering)
-		sdebug_driver_template.dma_boundary = PAGE_SIZE - 1;
-
-	hpnt = scsi_host_alloc(&sdebug_driver_template, 0);
-	if (NULL == hpnt) {
-		pr_err("scsi_host_alloc failed\n");
-		error = -ENODEV;
-		return error;
-	}
-	if (submit_queues > nr_cpu_ids) {
-		pr_warn("%s: trim submit_queues (was %d) to nr_cpu_ids=%u\n",
-			my_name, submit_queues, nr_cpu_ids);
-		submit_queues = nr_cpu_ids;
-	}
-	/*
-	 * Decide whether to tell scsi subsystem that we want mq. The
-	 * following should give the same answer for each host.
-	 */
-	hpnt->nr_hw_queues = submit_queues;
-	if (sdebug_host_max_queue)
-		hpnt->host_tagset = 1;
-
-	/* poll queues are possible for nr_hw_queues > 1 */
-	if (hpnt->nr_hw_queues == 1 || (poll_queues < 1)) {
-		pr_warn("%s: trim poll_queues to 0. poll_q/nr_hw = (%d/%d)\n",
-			 my_name, poll_queues, hpnt->nr_hw_queues);
-		poll_queues = 0;
-	}
-
-	/*
-	 * Poll queues don't need interrupts, but we need at least one I/O queue
-	 * left over for non-polled I/O.
-	 * If condition not met, trim poll_queues to 1 (just for simplicity).
-	 */
-	if (poll_queues >= submit_queues) {
-		if (submit_queues < 3)
-			pr_warn("%s: trim poll_queues to 1\n", my_name);
-		else
-			pr_warn("%s: trim poll_queues to 1. Perhaps try poll_queues=%d\n",
-				my_name, submit_queues - 1);
-		poll_queues = 1;
-	}
-	if (poll_queues)
-		hpnt->nr_maps = 3;
-
-	sdbg_host->shost = hpnt;
-	if ((hpnt->this_id >= 0) && (sdebug_num_tgts > hpnt->this_id))
-		hpnt->max_id = sdebug_num_tgts + 1;
-	else
-		hpnt->max_id = sdebug_num_tgts;
-	/* = sdebug_max_luns; */
-	hpnt->max_lun = SCSI_W_LUN_REPORT_LUNS + 1;
-
-	hprot = 0;
-
-	switch (sdebug_dif) {
-
-	case T10_PI_TYPE1_PROTECTION:
-		hprot = SHOST_DIF_TYPE1_PROTECTION;
-		if (sdebug_dix)
-			hprot |= SHOST_DIX_TYPE1_PROTECTION;
-		break;
-
-	case T10_PI_TYPE2_PROTECTION:
-		hprot = SHOST_DIF_TYPE2_PROTECTION;
-		if (sdebug_dix)
-			hprot |= SHOST_DIX_TYPE2_PROTECTION;
-		break;
-
-	case T10_PI_TYPE3_PROTECTION:
-		hprot = SHOST_DIF_TYPE3_PROTECTION;
-		if (sdebug_dix)
-			hprot |= SHOST_DIX_TYPE3_PROTECTION;
-		break;
-
-	default:
-		if (sdebug_dix)
-			hprot |= SHOST_DIX_TYPE0_PROTECTION;
-		break;
-	}
-
-	scsi_host_set_prot(hpnt, hprot);
-
-	if (have_dif_prot || sdebug_dix)
-		pr_info("host protection%s%s%s%s%s%s%s\n",
-			(hprot & SHOST_DIF_TYPE1_PROTECTION) ? " DIF1" : "",
-			(hprot & SHOST_DIF_TYPE2_PROTECTION) ? " DIF2" : "",
-			(hprot & SHOST_DIF_TYPE3_PROTECTION) ? " DIF3" : "",
-			(hprot & SHOST_DIX_TYPE0_PROTECTION) ? " DIX0" : "",
-			(hprot & SHOST_DIX_TYPE1_PROTECTION) ? " DIX1" : "",
-			(hprot & SHOST_DIX_TYPE2_PROTECTION) ? " DIX2" : "",
-			(hprot & SHOST_DIX_TYPE3_PROTECTION) ? " DIX3" : "");
-
-	if (sdebug_guard == 1)
-		scsi_host_set_guard(hpnt, SHOST_DIX_GUARD_IP);
-	else
-		scsi_host_set_guard(hpnt, SHOST_DIX_GUARD_CRC);
-
-	sdebug_verbose = !!(SDEBUG_OPT_NOISE & sdebug_opts);
-	sdebug_any_injecting_opt = !!(SDEBUG_OPT_ALL_INJECTING & sdebug_opts);
-	if (sdebug_every_nth)	/* need stats counters for every_nth */
-		sdebug_statistics = true;
-	error = scsi_add_host(hpnt, &sdbg_host->dev);
-	if (error) {
-		pr_err("scsi_add_host failed\n");
-		error = -ENODEV;
-		scsi_host_put(hpnt);
-	} else {
-		scsi_scan_host(hpnt);
-	}
-
-	return error;
-}
-
-static void sdebug_driver_remove(struct device *dev)
-{
-	struct sdebug_host_info *sdbg_host;
-	struct sdebug_dev_info *sdbg_devinfo, *tmp;
-
-	sdbg_host = dev_to_sdebug_host(dev);
-
-	scsi_remove_host(sdbg_host->shost);
-
-	list_for_each_entry_safe(sdbg_devinfo, tmp, &sdbg_host->dev_info_list,
-				 dev_list) {
-		list_del(&sdbg_devinfo->dev_list);
-		kfree(sdbg_devinfo->zstate);
-		kfree(sdbg_devinfo);
-	}
-
-	scsi_host_put(sdbg_host->shost);
-}
-
-static struct bus_type pseudo_lld_bus = {
-	.name = "pseudo",
-	.probe = sdebug_driver_probe,
-	.remove = sdebug_driver_remove,
-	.drv_groups = sdebug_drv_groups,
-};
+static s                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   

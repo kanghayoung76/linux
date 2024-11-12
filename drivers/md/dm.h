@@ -101,24 +101,22 @@ int dm_setup_md_queue(struct mapped_device *md, struct dm_table *t);
 /*
  * Zoned targets related functions.
  */
-int dm_set_zones_restrictions(struct dm_table *t, struct request_queue *q);
+int dm_set_zones_restrictions(struct dm_table *t, struct request_queue *q,
+		struct queue_limits *lim);
+int dm_revalidate_zones(struct dm_table *t, struct request_queue *q);
 void dm_zone_endio(struct dm_io *io, struct bio *clone);
 #ifdef CONFIG_BLK_DEV_ZONED
-void dm_cleanup_zoned_dev(struct mapped_device *md);
 int dm_blk_report_zones(struct gendisk *disk, sector_t sector,
 			unsigned int nr_zones, report_zones_cb cb, void *data);
 bool dm_is_zone_write(struct mapped_device *md, struct bio *bio);
-int dm_zone_map_bio(struct dm_target_io *io);
+int dm_zone_get_reset_bitmap(struct mapped_device *md, struct dm_table *t,
+			     sector_t sector, unsigned int nr_zones,
+			     unsigned long *need_reset);
 #else
-static inline void dm_cleanup_zoned_dev(struct mapped_device *md) {}
 #define dm_blk_report_zones	NULL
 static inline bool dm_is_zone_write(struct mapped_device *md, struct bio *bio)
 {
 	return false;
-}
-static inline int dm_zone_map_bio(struct dm_target_io *tio)
-{
-	return DM_MAPIO_KILL;
 }
 #endif
 
@@ -188,9 +186,11 @@ void dm_kobject_release(struct kobject *kobj);
 /*
  * Targets for linear and striped mappings
  */
+int linear_map(struct dm_target *ti, struct bio *bio);
 int dm_linear_init(void);
 void dm_linear_exit(void);
 
+int stripe_map(struct dm_target *ti, struct bio *bio);
 int dm_stripe_init(void);
 void dm_stripe_exit(void);
 
@@ -203,15 +203,12 @@ int dm_open_count(struct mapped_device *md);
 int dm_lock_for_deletion(struct mapped_device *md, bool mark_deferred, bool only_deferred);
 int dm_cancel_deferred_remove(struct mapped_device *md);
 int dm_request_based(struct mapped_device *md);
-int dm_get_table_device(struct mapped_device *md, dev_t dev, fmode_t mode,
+int dm_get_table_device(struct mapped_device *md, dev_t dev, blk_mode_t mode,
 			struct dm_dev **result);
 void dm_put_table_device(struct mapped_device *md, struct dm_dev *d);
 
 int dm_kobject_uevent(struct mapped_device *md, enum kobject_action action,
 		      unsigned int cookie, bool need_resize_uevent);
-
-void dm_internal_suspend(struct mapped_device *md);
-void dm_internal_resume(struct mapped_device *md);
 
 int dm_io_init(void);
 void dm_io_exit(void);

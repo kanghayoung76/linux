@@ -18,7 +18,6 @@ struct symbol_conf {
 			show_kernel_path,
 			use_modules,
 			allow_aliases,
-			sort_by_name,
 			show_nr_samples,
 			show_total_period,
 			use_callchain,
@@ -43,7 +42,12 @@ struct symbol_conf {
 			inline_name,
 			disable_add2line_warn,
 			buildid_mmap2,
-			guest_code;
+			guest_code,
+			lazy_load_kernel_maps,
+			keep_exited_threads,
+			annotate_data_member,
+			annotate_data_sample,
+			skip_empty;
 	const char	*vmlinux_name,
 			*kallsyms_name,
 			*source_prefix,
@@ -60,7 +64,7 @@ struct symbol_conf {
 			*sym_list_str,
 			*col_width_list_str,
 			*bt_stop_list_str;
-	char		*addr2line_path;
+	const char		*addr2line_path;
 	unsigned long	time_quantum;
        struct strlist	*dso_list,
 			*comm_list,

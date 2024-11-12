@@ -17,13 +17,14 @@
  */
 
 #include <linux/module.h>
+#include <linux/pci.h>
 #include <linux/slab.h>
 #include <linux/mei.h>
 #include <linux/mei_cl_bus.h>
 #include <linux/component.h>
 #include <drm/drm_connector.h>
-#include <drm/i915_component.h>
-#include <drm/i915_hdcp_interface.h>
+#include <drm/intel/i915_component.h>
+#include <drm/intel/i915_hdcp_interface.h>
 
 #include "mei_hdcp.h"
 
@@ -735,13 +736,13 @@ static const struct i915_hdcp_ops mei_hdcp_ops = {
 static int mei_component_master_bind(struct device *dev)
 {
 	struct mei_cl_device *cldev = to_mei_cl_device(dev);
-	struct i915_hdcp_master *comp_master = mei_cldev_get_drvdata(cldev);
+	struct i915_hdcp_arbiter *comp_arbiter = mei_cldev_get_drvdata(cldev);
 	int ret;
 
 	dev_dbg(dev, "%s\n", __func__);
-	comp_master->ops = &mei_hdcp_ops;
-	comp_master->hdcp_dev = dev;
-	ret = component_bind_all(dev, comp_master);
+	comp_arbiter->ops = &mei_hdcp_ops;
+	comp_arbiter->hdcp_dev = dev;
+	ret = component_bind_all(dev, comp_arbiter);
 	if (ret < 0)
 		return ret;
 
@@ -751,10 +752,10 @@ static int mei_component_master_bind(struct device *dev)
 static void mei_component_master_unbind(struct device *dev)
 {
 	struct mei_cl_device *cldev = to_mei_cl_device(dev);
-	struct i915_hdcp_master *comp_master = mei_cldev_get_drvdata(cldev);
+	struct i915_hdcp_arbiter *comp_arbiter = mei_cldev_get_drvdata(cldev);
 
 	dev_dbg(dev, "%s\n", __func__);
-	component_unbind_all(dev, comp_master);
+	component_unbind_all(dev, comp_arbiter);
 }
 
 static const struct component_master_ops mei_component_master_ops = {
@@ -781,9 +782,18 @@ static int mei_hdcp_component_match(struct device *dev, int subcomponent,
 				    void *data)
 {
 	struct device *base = data;
+	struct pci_dev *pdev;
 
-	if (!dev->driver || strcmp(dev->driver->name, "i915") ||
-	    subcomponent != I915_COMPONENT_HDCP)
+	if (!dev_is_pci(dev))
+		return 0;
+
+	pdev = to_pci_dev(dev);
+
+	if (pdev->class != (PCI_CLASS_DISPLAY_VGA << 8) ||
+	    pdev->vendor != PCI_VENDOR_ID_INTEL)
+		return 0;
+
+	if (subcomponent != I915_COMPONENT_HDCP)
 		return 0;
 
 	base = base->parent;
@@ -799,7 +809,7 @@ static int mei_hdcp_component_match(struct device *dev, int subcomponent,
 static int mei_hdcp_probe(struct mei_cl_device *cldev,
 			  const struct mei_cl_device_id *id)
 {
-	struct i915_hdcp_master *comp_master;
+	struct i915_hdcp_arbiter *comp_arbiter;
 	struct component_match *master_match;
 	int ret;
 
@@ -809,8 +819,8 @@ static int mei_hdcp_probe(struct mei_cl_device *cldev,
 		goto enable_err_exit;
 	}
 
-	comp_master = kzalloc(sizeof(*comp_master), GFP_KERNEL);
-	if (!comp_master) {
+	comp_arbiter = kzalloc(sizeof(*comp_arbiter), GFP_KERNEL);
+	if (!comp_arbiter) {
 		ret = -ENOMEM;
 		goto err_exit;
 	}
@@ -823,7 +833,7 @@ static int mei_hdcp_probe(struct mei_cl_device *cldev,
 		goto err_exit;
 	}
 
-	mei_cldev_set_drvdata(cldev, comp_master);
+	mei_cldev_set_drvdata(cldev, comp_arbiter);
 	ret = component_master_add_with_match(&cldev->dev,
 					      &mei_component_master_ops,
 					      master_match);
@@ -836,7 +846,7 @@ static int mei_hdcp_probe(struct mei_cl_device *cldev,
 
 err_exit:
 	mei_cldev_set_drvdata(cldev, NULL);
-	kfree(comp_master);
+	kfree(comp_arbiter);
 	mei_cldev_disable(cldev);
 enable_err_exit:
 	return ret;
@@ -844,11 +854,11 @@ enable_err_exit:
 
 static void mei_hdcp_remove(struct mei_cl_device *cldev)
 {
-	struct i915_hdcp_master *comp_master = mei_cldev_get_drvdata(cldev);
+	struct i915_hdcp_arbiter *comp_arbiter = mei_cldev_get_drvdata(cldev);
 	int ret;
 
 	component_master_del(&cldev->dev, &mei_component_master_ops);
-	kfree(comp_master);
+	kfree(comp_arbiter);
 	mei_cldev_set_drvdata(cldev, NULL);
 
 	ret = mei_cldev_disable(cldev);

@@ -71,7 +71,7 @@ const struct argp bench_local_storage_create_argp = {
 
 static void validate(void)
 {
-	if (env.consumer_cnt > 1) {
+	if (env.consumer_cnt != 0) {
 		fprintf(stderr,
 			"local-storage-create benchmark does not need consumer\n");
 		exit(1);
@@ -143,11 +143,6 @@ static void measure(struct bench_res *res)
 	res->drops = atomic_swap(&skel->bss->kmalloc_cnts, 0);
 }
 
-static void *consumer(void *input)
-{
-	return NULL;
-}
-
 static void *sk_producer(void *input)
 {
 	struct thread *t = &threads[(long)(input)];
@@ -191,7 +186,7 @@ static void *task_producer(void *input)
 
 		for (i = 0; i < batch_sz; i++) {
 			if (!pthd_results[i])
-				pthread_join(pthds[i], NULL);;
+				pthread_join(pthds[i], NULL);
 		}
 	}
 
@@ -257,7 +252,6 @@ const struct bench bench_local_storage_create = {
 	.validate = validate,
 	.setup = setup,
 	.producer_thread = producer,
-	.consumer_thread = consumer,
 	.measure = measure,
 	.report_progress = report_progress,
 	.report_final = report_final,

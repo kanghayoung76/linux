@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 /*
- * Copyright (C) 2013-2014, 2018-2019, 2022 Intel Corporation
+ * Copyright (C) 2013-2014, 2018-2019, 2022-2024 Intel Corporation
  * Copyright (C) 2013-2014 Intel Mobile Communications GmbH
  */
 #include "mvm.h"
@@ -180,9 +180,6 @@ static int iwl_mvm_sf_config(struct iwl_mvm *mvm, struct ieee80211_sta *sta,
 	};
 	int ret = 0;
 
-	if (mvm->cfg->disable_dummy_notification)
-		sf_cmd.state |= cpu_to_le32(SF_CFG_DUMMY_NOTIF_OFF);
-
 	/*
 	 * If an associated AP sta changed its antenna configuration, the state
 	 * will remain FULL_ON but SF parameters need to be reconsidered.
@@ -235,6 +232,9 @@ int iwl_mvm_sf_update(struct iwl_mvm *mvm, struct ieee80211_vif *changed_vif,
 	};
 	struct ieee80211_sta *sta = NULL;
 
+	if (fw_has_api(&mvm->fw->ucode_capa,
+		       IWL_UCODE_TLV_API_SMART_FIFO_OFFLOAD))
+		return 0;
 	/*
 	 * Ignore the call if we are in HW Restart flow, or if the handled
 	 * vif is a p2p device.

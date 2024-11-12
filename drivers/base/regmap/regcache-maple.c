@@ -74,7 +74,7 @@ static int regcache_maple_write(struct regmap *map, unsigned int reg,
 	rcu_read_unlock();
 
 	entry = kmalloc((last - index + 1) * sizeof(unsigned long),
-			GFP_KERNEL);
+			map->alloc_flags);
 	if (!entry)
 		return -ENOMEM;
 
@@ -92,7 +92,7 @@ static int regcache_maple_write(struct regmap *map, unsigned int reg,
 	mas_lock(&mas);
 
 	mas_set_range(&mas, index, last);
-	ret = mas_store_gfp(&mas, entry, GFP_KERNEL);
+	ret = mas_store_gfp(&mas, entry, map->alloc_flags);
 
 	mas_unlock(&mas);
 
@@ -110,9 +110,10 @@ static int regcache_maple_drop(struct regmap *map, unsigned int min,
 	struct maple_tree *mt = map->cache;
 	MA_STATE(mas, mt, min, max);
 	unsigned long *entry, *lower, *upper;
-	unsigned long lower_index, lower_last;
+	/* initialized to work around false-positive -Wuninitialized warning */
+	unsigned long lower_index = 0, lower_last = 0;
 	unsigned long upper_index, upper_last;
-	int ret;
+	int ret = 0;
 
 	lower = NULL;
 	upper = NULL;
@@ -132,9 +133,9 @@ static int regcache_maple_drop(struct regmap *map, unsigned int min,
 			lower_index = mas.index;
 			lower_last = min -1;
 
-			lower = kmemdup(entry, ((min - mas.index) *
-						sizeof(unsigned long)),
-					GFP_KERNEL);
+			lower = kmemdup_array(entry,
+					      min - mas.index, sizeof(*lower),
+					      map->alloc_flags);
 			if (!lower) {
 				ret = -ENOMEM;
 				goto out_unlocked;
@@ -145,10 +146,9 @@ static int regcache_maple_drop(struct regmap *map, unsigned int min,
 			upper_index = max + 1;
 			upper_last = mas.last;
 
-			upper = kmemdup(&entry[max + 1],
-					((mas.last - max) *
-					 sizeof(unsigned long)),
-					GFP_KERNEL);
+			upper = kmemdup_array(&entry[max - mas.index + 1],
+					      mas.last - max, sizeof(*upper),
+					      map->alloc_flags);
 			if (!upper) {
 				ret = -ENOMEM;
 				goto out_unlocked;
@@ -162,7 +162,7 @@ static int regcache_maple_drop(struct regmap *map, unsigned int min,
 		/* Insert new nodes with the saved data */
 		if (lower) {
 			mas_set_range(&mas, lower_index, lower_last);
-			ret = mas_store_gfp(&mas, lower, GFP_KERNEL);
+			ret = mas_store_gfp(&mas, lower, map->alloc_flags);
 			if (ret != 0)
 				goto out;
 			lower = NULL;
@@ -170,7 +170,7 @@ static int regcache_maple_drop(struct regmap *map, unsigned int min,
 
 		if (upper) {
 			mas_set_range(&mas, upper_index, upper_last);
-			ret = mas_store_gfp(&mas, upper, GFP_KERNEL);
+			ret = mas_store_gfp(&mas, upper, map->alloc_flags);
 			if (ret != 0)
 				goto out;
 			upper = NULL;
@@ -186,6 +186,55 @@ out_unlocked:
 	return ret;
 }
 
+static int regcache_maple_sync_block(struct regmap *map, unsigned long *entry,
+				     struct ma_state *mas,
+				     unsigned int min, unsigned int max)
+{
+	void *buf;
+	unsigned long r;
+	size_t val_bytes = map->format.val_bytes;
+	int ret = 0;
+
+	mas_pause(mas);
+	rcu_read_unlock();
+
+	/*
+	 * Use a raw write if writing more than one register to a
+	 * device that supports raw writes to reduce transaction
+	 * overheads.
+	 */
+	if (max - min > 1 && regmap_can_raw_write(map)) {
+		buf = kmalloc(val_bytes * (max - min), map->alloc_flags);
+		if (!buf) {
+			ret = -ENOMEM;
+			goto out;
+		}
+
+		/* Render the data for a raw write */
+		for (r = min; r < max; r++) {
+			regcache_set_val(map, buf, r - min,
+					 entry[r - mas->index]);
+		}
+
+		ret = _regmap_raw_write(map, min, buf, (max - min) * val_bytes,
+					false);
+
+		kfree(buf);
+	} else {
+		for (r = min; r < max; r++) {
+			ret = _regmap_write(map, r,
+					    entry[r - mas->index]);
+			if (ret != 0)
+				goto out;
+		}
+	}
+
+out:
+	rcu_read_lock();
+
+	return ret;
+}
+
 static int regcache_maple_sync(struct regmap *map, unsigned int min,
 			       unsigned int max)
 {
@@ -194,8 +243,9 @@ static int regcache_maple_sync(struct regmap *map, unsigned int min,
 	MA_STATE(mas, mt, min, max);
 	unsigned long lmin = min;
 	unsigned long lmax = max;
-	unsigned int r;
-	int ret;
+	unsigned int r, v, sync_start;
+	int ret = 0;
+	bool sync_needed = false;
 
 	map->cache_bypass = true;
 
@@ -203,18 +253,38 @@ static int regcache_maple_sync(struct regmap *map, unsigned int min,
 
 	mas_for_each(&mas, entry, max) {
 		for (r = max(mas.index, lmin); r <= min(mas.last, lmax); r++) {
-			mas_pause(&mas);
-			rcu_read_unlock();
-			ret = regcache_sync_val(map, r, entry[r - mas.index]);
+			v = entry[r - mas.index];
+
+			if (regcache_reg_needs_sync(map, r, v)) {
+				if (!sync_needed) {
+					sync_start = r;
+					sync_needed = true;
+				}
+				continue;
+			}
+
+			if (!sync_needed)
+				continue;
+
+			ret = regcache_maple_sync_block(map, entry, &mas,
+							sync_start, r);
 			if (ret != 0)
 				goto out;
-			rcu_read_lock();
+			sync_needed = false;
+		}
+
+		if (sync_needed) {
+			ret = regcache_maple_sync_block(map, entry, &mas,
+							sync_start, r);
+			if (ret != 0)
+				goto out;
+			sync_needed = false;
 		}
 	}
 
+out:
 	rcu_read_unlock();
 
-out:
 	map->cache_bypass = false;
 
 	return ret;
@@ -224,7 +294,7 @@ static int regcache_maple_exit(struct regmap *map)
 {
 	struct maple_tree *mt = map->cache;
 	MA_STATE(mas, mt, 0, UINT_MAX);
-	unsigned int *entry;;
+	unsigned int *entry;
 
 	/* if we've already been called then just return */
 	if (!mt)
@@ -242,26 +312,72 @@ static int regcache_maple_exit(struct regmap *map)
 	return 0;
 }
 
+static int regcache_maple_insert_block(struct regmap *map, int first,
+					int last)
+{
+	struct maple_tree *mt = map->cache;
+	MA_STATE(mas, mt, first, last);
+	unsigned long *entry;
+	int i, ret;
+
+	entry = kcalloc(last - first + 1, sizeof(unsigned long), map->alloc_flags);
+	if (!entry)
+		return -ENOMEM;
+
+	for (i = 0; i < last - first + 1; i++)
+		entry[i] = map->reg_defaults[first + i].def;
+
+	mas_lock(&mas);
+
+	mas_set_range(&mas, map->reg_defaults[first].reg,
+		      map->reg_defaults[last].reg);
+	ret = mas_store_gfp(&mas, entry, map->alloc_flags);
+
+	mas_unlock(&mas);
+
+	if (ret)
+		kfree(entry);
+
+	return ret;
+}
+
 static int regcache_maple_init(struct regmap *map)
 {
 	struct maple_tree *mt;
 	int i;
 	int ret;
+	int range_start;
 
-	mt = kmalloc(sizeof(*mt), GFP_KERNEL);
+	mt = kmalloc(sizeof(*mt), map->alloc_flags);
 	if (!mt)
 		return -ENOMEM;
 	map->cache = mt;
 
 	mt_init(mt);
 
-	for (i = 0; i < map->num_reg_defaults; i++) {
-		ret = regcache_maple_write(map,
-					   map->reg_defaults[i].reg,
-					   map->reg_defaults[i].def);
-		if (ret)
-			goto err;
+	if (!map->num_reg_defaults)
+		return 0;
+
+	range_start = 0;
+
+	/* Scan for ranges of contiguous registers */
+	for (i = 1; i < map->num_reg_defaults; i++) {
+		if (map->reg_defaults[i].reg !=
+		    map->reg_defaults[i - 1].reg + 1) {
+			ret = regcache_maple_insert_block(map, range_start,
+							  i - 1);
+			if (ret != 0)
+				goto err;
+
+			range_start = i;
+		}
 	}
+
+	/* Add the last block */
+	ret = regcache_maple_insert_block(map, range_start,
+					  map->num_reg_defaults - 1);
+	if (ret != 0)
+		goto err;
 
 	return 0;
 

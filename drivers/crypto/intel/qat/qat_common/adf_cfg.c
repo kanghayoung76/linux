@@ -74,17 +74,34 @@ int adf_cfg_dev_add(struct adf_accel_dev *accel_dev)
 	INIT_LIST_HEAD(&dev_cfg_data->sec_list);
 	init_rwsem(&dev_cfg_data->lock);
 	accel_dev->cfg = dev_cfg_data;
-
-	/* accel_dev->debugfs_dir should always be non-NULL here */
-	dev_cfg_data->debug = debugfs_create_file("dev_cfg", S_IRUSR,
-						  accel_dev->debugfs_dir,
-						  dev_cfg_data,
-						  &qat_dev_cfg_fops);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(adf_cfg_dev_add);
 
+void adf_cfg_dev_dbgfs_add(struct adf_accel_dev *accel_dev)
+{
+	struct adf_cfg_device_data *dev_cfg_data = accel_dev->cfg;
+
+	dev_cfg_data->debug = debugfs_create_file("dev_cfg", 0400,
+						  accel_dev->debugfs_dir,
+						  dev_cfg_data,
+						  &qat_dev_cfg_fops);
+}
+
+void adf_cfg_dev_dbgfs_rm(struct adf_accel_dev *accel_dev)
+{
+	struct adf_cfg_device_data *dev_cfg_data = accel_dev->cfg;
+
+	if (!dev_cfg_data)
+		return;
+
+	debugfs_remove(dev_cfg_data->debug);
+	dev_cfg_data->debug = NULL;
+}
+
 static void adf_cfg_section_del_all(struct list_head *head);
+static void adf_cfg_section_del_all_except(struct list_head *head,
+					   const char *section_name);
 
 void adf_cfg_del_all(struct adf_accel_dev *accel_dev)
 {
@@ -92,6 +109,17 @@ void adf_cfg_del_all(struct adf_accel_dev *accel_dev)
 
 	down_write(&dev_cfg_data->lock);
 	adf_cfg_section_del_all(&dev_cfg_data->sec_list);
+	up_write(&dev_cfg_data->lock);
+	clear_bit(ADF_STATUS_CONFIGURED, &accel_dev->status);
+}
+
+void adf_cfg_del_all_except(struct adf_accel_dev *accel_dev,
+			    const char *section_name)
+{
+	struct adf_cfg_device_data *dev_cfg_data = accel_dev->cfg;
+
+	down_write(&dev_cfg_data->lock);
+	adf_cfg_section_del_all_except(&dev_cfg_data->sec_list, section_name);
 	up_write(&dev_cfg_data->lock);
 	clear_bit(ADF_STATUS_CONFIGURED, &accel_dev->status);
 }
@@ -116,7 +144,6 @@ void adf_cfg_dev_remove(struct adf_accel_dev *accel_dev)
 	down_write(&dev_cfg_data->lock);
 	adf_cfg_section_del_all(&dev_cfg_data->sec_list);
 	up_write(&dev_cfg_data->lock);
-	debugfs_remove(dev_cfg_data->debug);
 	kfree(dev_cfg_data);
 	accel_dev->cfg = NULL;
 }
@@ -165,6 +192,22 @@ static void adf_cfg_section_del_all(struct list_head *head)
 
 	list_for_each_prev_safe(list, tmp, head) {
 		ptr = list_entry(list, struct adf_cfg_section, list);
+		adf_cfg_keyval_del_all(&ptr->param_head);
+		list_del(list);
+		kfree(ptr);
+	}
+}
+
+static void adf_cfg_section_del_all_except(struct list_head *head,
+					   const char *section_name)
+{
+	struct list_head *list, *tmp;
+	struct adf_cfg_section *ptr;
+
+	list_for_each_prev_safe(list, tmp, head) {
+		ptr = list_entry(list, struct adf_cfg_section, list);
+		if (!strcmp(ptr->name, section_name))
+			continue;
 		adf_cfg_keyval_del_all(&ptr->param_head);
 		list_del(list);
 		kfree(ptr);
@@ -276,17 +319,19 @@ int adf_cfg_add_key_value_param(struct adf_accel_dev *accel_dev,
 	 * 3. if the key exists with the same value, then return without doing
 	 *    anything (the newly created key_val is freed).
 	 */
+	down_write(&cfg->lock);
 	if (!adf_cfg_key_val_get(accel_dev, section_name, key, temp_val)) {
 		if (strncmp(temp_val, key_val->val, sizeof(temp_val))) {
 			adf_cfg_keyval_remove(key, section);
 		} else {
 			kfree(key_val);
-			return 0;
+			goto out;
 		}
 	}
 
-	down_write(&cfg->lock);
 	adf_cfg_keyval_add(key_val, section);
+
+out:
 	up_write(&cfg->lock);
 	return 0;
 }

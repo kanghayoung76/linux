@@ -10,7 +10,6 @@
 #include <linux/init.h>
 #include <linux/input.h>
 #include <linux/module.h>
-#include <linux/of_gpio.h>
 #include <linux/regmap.h>
 #include <linux/acpi.h>
 
@@ -427,7 +426,7 @@ static const struct dev_pm_ops ts3a227e_pm = {
 };
 
 static const struct i2c_device_id ts3a227e_i2c_ids[] = {
-	{ "ts3a227e", 0 },
+	{ "ts3a227e" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, ts3a227e_i2c_ids);
@@ -455,7 +454,7 @@ static struct i2c_driver ts3a227e_driver = {
 		.of_match_table = of_match_ptr(ts3a227e_of_match),
 		.acpi_match_table = ACPI_PTR(ts3a227e_acpi_match),
 	},
-	.probe_new = ts3a227e_i2c_probe,
+	.probe = ts3a227e_i2c_probe,
 	.id_table = ts3a227e_i2c_ids,
 };
 module_i2c_driver(ts3a227e_driver);

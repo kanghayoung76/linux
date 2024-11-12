@@ -399,21 +399,29 @@ static u64 find_callsite(struct evsel *evsel, struct perf_sample *sample)
 	struct addr_location al;
 	struct machine *machine = &kmem_session->machines.host;
 	struct callchain_cursor_node *node;
+	struct callchain_cursor *cursor;
+	u64 result = sample->ip;
 
+	addr_location__init(&al);
 	if (alloc_func_list == NULL) {
 		if (build_alloc_func_list() < 0)
 			goto out;
 	}
 
 	al.thread = machine__findnew_thread(machine, sample->pid, sample->tid);
-	sample__resolve_callchain(sample, &callchain_cursor, NULL, evsel, &al, 16);
 
-	callchain_cursor_commit(&callchain_cursor);
+	cursor = get_tls_callchain_cursor();
+	if (cursor == NULL)
+		goto out;
+
+	sample__resolve_callchain(sample, cursor, NULL, evsel, &al, 16);
+
+	callchain_cursor_commit(cursor);
 	while (true) {
 		struct alloc_func key, *caller;
 		u64 addr;
 
-		node = callchain_cursor_current(&callchain_cursor);
+		node = callchain_cursor_current(cursor);
 		if (node == NULL)
 			break;
 
@@ -427,16 +435,18 @@ static u64 find_callsite(struct evsel *evsel, struct perf_sample *sample)
 			else
 				addr = node->ip;
 
-			return addr;
+			result = addr;
+			goto out;
 		} else
 			pr_debug3("skipping alloc function: %s\n", caller->name);
 
-		callchain_cursor_advance(&callchain_cursor);
+		callchain_cursor_advance(cursor);
 	}
 
-out:
 	pr_debug2("unknown callsite: %"PRIx64 "\n", sample->ip);
-	return sample->ip;
+out:
+	addr_location__exit(&al);
+	return result;
 }
 
 struct sort_dimension {
@@ -945,7 +955,7 @@ static bool perf_kmem__skip_sample(struct perf_sample *sample)
 typedef int (*tracepoint_handler)(struct evsel *evsel,
 				  struct perf_sample *sample);
 
-static int process_sample_event(struct perf_tool *tool __maybe_unused,
+static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 				union perf_event *event,
 				struct perf_sample *sample,
 				struct evsel *evsel,
@@ -964,7 +974,7 @@ static int process_sample_event(struct perf_tool *tool __maybe_unused,
 	if (perf_kmem__skip_sample(sample))
 		return 0;
 
-	dump_printf(" ... thread: %s:%d\n", thread__comm_str(thread), thread->tid);
+	dump_printf(" ... thread: %s:%d\n", thread__comm_str(thread), thread__tid(thread));
 
 	if (evsel->handler != NULL) {
 		tracepoint_handler f = evsel->handler;
@@ -975,15 +985,6 @@ static int process_sample_event(struct perf_tool *tool __maybe_unused,
 
 	return err;
 }
-
-static struct perf_tool perf_kmem = {
-	.sample		 = process_sample_event,
-	.comm		 = perf_event__process_comm,
-	.mmap		 = perf_event__process_mmap,
-	.mmap2		 = perf_event__process_mmap2,
-	.namespaces	 = perf_event__process_namespaces,
-	.ordered_events	 = true,
-};
 
 static double fragmentation(unsigned long n_req, unsigned long n_alloc)
 {
@@ -1398,7 +1399,7 @@ static int __cmd_kmem(struct perf_session *session)
 	}
 
 	evlist__for_each_entry(session->evlist, evsel) {
-		if (!strcmp(evsel__name(evsel), "kmem:mm_page_alloc") &&
+		if (evsel__name_is(evsel, "kmem:mm_page_alloc") &&
 		    evsel__field(evsel, "pfn")) {
 			use_pfn = true;
 			break;
@@ -1961,6 +1962,7 @@ int cmd_kmem(int argc, const char **argv)
 		NULL
 	};
 	struct perf_session *session;
+	struct perf_tool perf_kmem;
 	static const char errmsg[] = "No %s allocation events found.  Have you run 'perf kmem record --%s'?\n";
 	int ret = perf_config(kmem_config, NULL);
 
@@ -1987,6 +1989,13 @@ int cmd_kmem(int argc, const char **argv)
 	}
 
 	data.path = input_name;
+
+	perf_tool__init(&perf_kmem, /*ordered_events=*/true);
+	perf_kmem.sample	= process_sample_event;
+	perf_kmem.comm		= perf_event__process_comm;
+	perf_kmem.mmap		= perf_event__process_mmap;
+	perf_kmem.mmap2		= perf_event__process_mmap2;
+	perf_kmem.namespaces	= perf_event__process_namespaces;
 
 	kmem_session = session = perf_session__new(&data, &perf_kmem);
 	if (IS_ERR(session))
@@ -2048,7 +2057,8 @@ int cmd_kmem(int argc, const char **argv)
 
 out_delete:
 	perf_session__delete(session);
+	/* free usage string allocated by parse_options_subcommand */
+	free((void *)kmem_usage[0]);
 
 	return ret;
 }
-

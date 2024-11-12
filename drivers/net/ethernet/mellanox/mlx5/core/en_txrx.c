@@ -55,7 +55,7 @@ static void mlx5e_handle_tx_dim(struct mlx5e_txqsq *sq)
 		return;
 
 	dim_update_sample(sq->cq.event_ctr, stats->packets, stats->bytes, &dim_sample);
-	net_dim(&sq->dim, dim_sample);
+	net_dim(sq->dim, dim_sample);
 }
 
 static void mlx5e_handle_rx_dim(struct mlx5e_rq *rq)
@@ -67,7 +67,7 @@ static void mlx5e_handle_rx_dim(struct mlx5e_rq *rq)
 		return;
 
 	dim_update_sample(rq->cq.event_ctr, stats->packets, stats->bytes, &dim_sample);
-	net_dim(&rq->dim, dim_sample);
+	net_dim(rq->dim, dim_sample);
 }
 
 void mlx5e_trigger_irq(struct mlx5e_icosq *sq)
@@ -207,7 +207,7 @@ int mlx5e_napi_poll(struct napi_struct *napi, int budget)
 		}
 		ch_stats->aff_change++;
 		aff_change = true;
-		if (budget && work_done == budget)
+		if (work_done == budget)
 			work_done--;
 	}
 

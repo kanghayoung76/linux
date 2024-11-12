@@ -24,6 +24,7 @@
  *     David Airlie
  */
 
+#include <linux/fb.h>
 #include <linux/pci.h>
 #include <linux/pm_runtime.h>
 #include <linux/vga_switcheroo.h>
@@ -66,7 +67,7 @@ static int radeon_fbdev_create_pinned_object(struct drm_fb_helper *fb_helper,
 	int height = mode_cmd->height;
 	u32 cpp;
 
-	info = drm_get_format_info(rdev->ddev, mode_cmd);
+	info = drm_get_format_info(rdev_to_drm(rdev), mode_cmd);
 	cpp = info->cpp[0];
 
 	/* need to align pitch with crtc limits */
@@ -147,15 +148,15 @@ static int radeon_fbdev_fb_open(struct fb_info *info, int user)
 	struct radeon_device *rdev = fb_helper->dev->dev_private;
 	int ret;
 
-	ret = pm_runtime_get_sync(rdev->ddev->dev);
+	ret = pm_runtime_get_sync(rdev_to_drm(rdev)->dev);
 	if (ret < 0 && ret != -EACCES)
 		goto err_pm_runtime_mark_last_busy;
 
 	return 0;
 
 err_pm_runtime_mark_last_busy:
-	pm_runtime_mark_last_busy(rdev->ddev->dev);
-	pm_runtime_put_autosuspend(rdev->ddev->dev);
+	pm_runtime_mark_last_busy(rdev_to_drm(rdev)->dev);
+	pm_runtime_put_autosuspend(rdev_to_drm(rdev)->dev);
 	return ret;
 }
 
@@ -164,8 +165,8 @@ static int radeon_fbdev_fb_release(struct fb_info *info, int user)
 	struct drm_fb_helper *fb_helper = info->par;
 	struct radeon_device *rdev = fb_helper->dev->dev_private;
 
-	pm_runtime_mark_last_busy(rdev->ddev->dev);
-	pm_runtime_put_autosuspend(rdev->ddev->dev);
+	pm_runtime_mark_last_busy(rdev_to_drm(rdev)->dev);
+	pm_runtime_put_autosuspend(rdev_to_drm(rdev)->dev);
 
 	return 0;
 }
@@ -190,14 +191,10 @@ static void radeon_fbdev_fb_destroy(struct fb_info *info)
 
 static const struct fb_ops radeon_fbdev_fb_ops = {
 	.owner = THIS_MODULE,
-	DRM_FB_HELPER_DEFAULT_OPS,
 	.fb_open = radeon_fbdev_fb_open,
 	.fb_release = radeon_fbdev_fb_release,
-	.fb_read = drm_fb_helper_cfb_read,
-	.fb_write = drm_fb_helper_cfb_write,
-	.fb_fillrect = drm_fb_helper_cfb_fillrect,
-	.fb_copyarea = drm_fb_helper_cfb_copyarea,
-	.fb_imageblit = drm_fb_helper_cfb_imageblit,
+	FB_DEFAULT_IOMEM_OPS,
+	DRM_FB_HELPER_DEFAULT_OPS,
 	.fb_destroy = radeon_fbdev_fb_destroy,
 };
 
@@ -239,7 +236,7 @@ static int radeon_fbdev_fb_helper_fb_probe(struct drm_fb_helper *fb_helper,
 		ret = -ENOMEM;
 		goto err_radeon_fbdev_destroy_pinned_object;
 	}
-	ret = radeon_framebuffer_init(rdev->ddev, fb, &mode_cmd, gobj);
+	ret = radeon_framebuffer_init(rdev_to_drm(rdev), fb, &mode_cmd, gobj);
 	if (ret) {
 		DRM_ERROR("failed to initialize framebuffer %d\n", ret);
 		goto err_kfree;
@@ -256,7 +253,7 @@ static int radeon_fbdev_fb_helper_fb_probe(struct drm_fb_helper *fb_helper,
 	}
 
 	info->fbops = &radeon_fbdev_fb_ops;
-	info->flags = FBINFO_DEFAULT;
+
 	/* radeon resume is fragile and needs a vt switch to help it along */
 	info->skip_vt_switch = false;
 
@@ -377,18 +374,14 @@ void radeon_fbdev_setup(struct radeon_device *rdev)
 	fb_helper = kzalloc(sizeof(*fb_helper), GFP_KERNEL);
 	if (!fb_helper)
 		return;
-	drm_fb_helper_prepare(rdev->ddev, fb_helper, bpp_sel, &radeon_fbdev_fb_helper_funcs);
+	drm_fb_helper_prepare(rdev_to_drm(rdev), fb_helper, bpp_sel, &radeon_fbdev_fb_helper_funcs);
 
-	ret = drm_client_init(rdev->ddev, &fb_helper->client, "radeon-fbdev",
+	ret = drm_client_init(rdev_to_drm(rdev), &fb_helper->client, "radeon-fbdev",
 			      &radeon_fbdev_client_funcs);
 	if (ret) {
-		drm_err(rdev->ddev, "Failed to register client: %d\n", ret);
+		drm_err(rdev_to_drm(rdev), "Failed to register client: %d\n", ret);
 		goto err_drm_client_init;
 	}
-
-	ret = radeon_fbdev_client_hotplug(&fb_helper->client);
-	if (ret)
-		drm_dbg_kms(rdev->ddev, "client hotplug ret=%d\n", ret);
 
 	drm_client_register(&fb_helper->client);
 
@@ -401,13 +394,13 @@ err_drm_client_init:
 
 void radeon_fbdev_set_suspend(struct radeon_device *rdev, int state)
 {
-	if (rdev->ddev->fb_helper)
-		drm_fb_helper_set_suspend(rdev->ddev->fb_helper, state);
+	if (rdev_to_drm(rdev)->fb_helper)
+		drm_fb_helper_set_suspend(rdev_to_drm(rdev)->fb_helper, state);
 }
 
 bool radeon_fbdev_robj_is_fb(struct radeon_device *rdev, struct radeon_bo *robj)
 {
-	struct drm_fb_helper *fb_helper = rdev->ddev->fb_helper;
+	struct drm_fb_helper *fb_helper = rdev_to_drm(rdev)->fb_helper;
 	struct drm_gem_object *gobj;
 
 	if (!fb_helper)

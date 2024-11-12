@@ -32,8 +32,6 @@
 
 #include "gem/i915_gem_object_types.h"
 
-enum i915_cache_level;
-
 /**
  * DOC: Global GTT views
  *
@@ -292,7 +290,6 @@ struct i915_vma {
 
 	struct list_head obj_link; /* Link in the object's VMA list */
 	struct rb_node obj_node;
-	struct hlist_node obj_hash;
 
 	/** This vma's place in the eviction list */
 	struct list_head evict_link;

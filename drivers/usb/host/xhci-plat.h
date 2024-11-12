@@ -8,7 +8,9 @@
 #ifndef _XHCI_PLAT_H
 #define _XHCI_PLAT_H
 
-#include "xhci.h"	/* for hcd_to_xhci() */
+struct device;
+struct platform_device;
+struct usb_hcd;
 
 struct xhci_plat_priv {
 	const char *firmware_name;
@@ -25,7 +27,7 @@ struct xhci_plat_priv {
 int xhci_plat_probe(struct platform_device *pdev, struct device *sysdev,
 		    const struct xhci_plat_priv *priv_match);
 
-int xhci_plat_remove(struct platform_device *dev);
+void xhci_plat_remove(struct platform_device *dev);
 extern const struct dev_pm_ops xhci_plat_pm_ops;
 
 #endif	/* _XHCI_PLAT_H */

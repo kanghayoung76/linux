@@ -194,8 +194,14 @@ static int tpmi_get_ctdp_control(struct isst_id *id, int config_index,
 	if (!(info.level_mask & level_mask))
 		return -1;
 
-	ctdp_level->fact_support = info.sst_tf_support;
-	ctdp_level->pbf_support = info.sst_bf_support;
+	if (api_version() > 2) {
+		ctdp_level->fact_support = info.sst_tf_support & BIT(config_index);
+		ctdp_level->pbf_support = info.sst_bf_support & BIT(config_index);
+	} else {
+		ctdp_level->fact_support = info.sst_tf_support;
+		ctdp_level->pbf_support = info.sst_bf_support;
+	}
+
 	ctdp_level->fact_enabled = !!(info.feature_state & BIT(1));
 	ctdp_level->pbf_enabled = !!(info.feature_state & BIT(0));
 
@@ -641,16 +647,30 @@ static int tpmi_pm_qos_config(struct isst_id *id, int enable_clos,
 			      int priority_type)
 {
 	struct isst_core_power info;
-	int ret;
+	int i, ret, saved_punit;
 
 	info.get_set = 1;
 	info.socket_id = id->pkg;
 	info.power_domain_id = id->punit;
 	info.enable = enable_clos;
 	info.priority_type = priority_type;
-	ret = tpmi_process_ioctl(ISST_IF_CORE_POWER_STATE, &info);
-	if (ret == -1)
-		return ret;
+
+	saved_punit = id->punit;
+
+	/* Set for all other dies also. This is per package setting */
+	for (i = 0; i < MAX_PUNIT_PER_DIE; i++) {
+		id->punit = i;
+		if (isst_is_punit_valid(id)) {
+			info.power_domain_id = i;
+			ret = tpmi_process_ioctl(ISST_IF_CORE_POWER_STATE, &info);
+			if (ret == -1) {
+				id->punit = saved_punit;
+				return ret;
+			}
+		}
+	}
+
+	id->punit = saved_punit;
 
 	return 0;
 }
@@ -686,7 +706,7 @@ int tpmi_set_clos(struct isst_id *id, int clos,
 		  struct isst_clos_config *clos_config)
 {
 	struct isst_clos_param info;
-	int ret;
+	int i, ret, saved_punit;
 
 	info.get_set = 1;
 	info.socket_id = id->pkg;
@@ -702,9 +722,22 @@ int tpmi_set_clos(struct isst_id *id, int clos,
 	if (info.max_freq_mhz <= 0xff)
 		info.max_freq_mhz *= 100;
 
-	ret = tpmi_process_ioctl(ISST_IF_CLOS_PARAM, &info);
-	if (ret == -1)
-		return ret;
+	saved_punit = id->punit;
+
+	/* Set for all other dies also. This is per package setting */
+	for (i = 0; i < MAX_PUNIT_PER_DIE; i++) {
+		id->punit = i;
+		if (isst_is_punit_valid(id)) {
+			info.power_domain_id = i;
+			ret = tpmi_process_ioctl(ISST_IF_CLOS_PARAM, &info);
+			if (ret == -1) {
+				id->punit = saved_punit;
+				return ret;
+			}
+		}
+	}
+
+	id->punit = saved_punit;
 
 	debug_printf("set cpu:%d clos:%d min:%d max:%d\n", id->cpu, clos,
 		     clos_config->clos_min, clos_config->clos_max);

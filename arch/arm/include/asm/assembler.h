@@ -21,6 +21,7 @@
 #include <asm/opcodes-virt.h>
 #include <asm/asm-offsets.h>
 #include <asm/page.h>
+#include <asm/pgtable.h>
 #include <asm/thread_info.h>
 #include <asm/uaccess-asm.h>
 
@@ -391,6 +392,23 @@ ALT_UP_B(.L0_\@)
 	.else
 	ALT_UP(W(nop))
 	.endif
+#endif
+	.endm
+
+/*
+ * Raw SMP data memory barrier
+ */
+	.macro	__smp_dmb mode
+#if __LINUX_ARM_ARCH__ >= 7
+	.ifeqs "\mode","arm"
+	dmb	ish
+	.else
+	W(dmb)	ish
+	.endif
+#elif __LINUX_ARM_ARCH__ == 6
+	mcr	p15, 0, r0, c7, c10, 5	@ dmb
+#else
+	.error "Incompatible SMP platform"
 #endif
 	.endm
 

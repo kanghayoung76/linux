@@ -2,6 +2,7 @@
 #ifndef _ASM_X86_COCO_H
 #define _ASM_X86_COCO_H
 
+#include <asm/asm.h>
 #include <asm/types.h>
 
 enum cc_vendor {
@@ -12,27 +13,19 @@ enum cc_vendor {
 
 #ifdef CONFIG_ARCH_HAS_CC_PLATFORM
 extern enum cc_vendor cc_vendor;
+extern u64 cc_mask;
 
-static inline enum cc_vendor cc_get_vendor(void)
+static inline void cc_set_mask(u64 mask)
 {
-	return cc_vendor;
+	RIP_REL_REF(cc_mask) = mask;
 }
 
-static inline void cc_set_vendor(enum cc_vendor vendor)
-{
-	cc_vendor = vendor;
-}
-
-void cc_set_mask(u64 mask);
 u64 cc_mkenc(u64 val);
 u64 cc_mkdec(u64 val);
+void cc_random_init(void);
 #else
-static inline enum cc_vendor cc_get_vendor(void)
-{
-	return CC_VENDOR_NONE;
-}
-
-static inline void cc_set_vendor(enum cc_vendor vendor) { }
+#define cc_vendor (CC_VENDOR_NONE)
+static const u64 cc_mask = 0;
 
 static inline u64 cc_mkenc(u64 val)
 {
@@ -43,6 +36,7 @@ static inline u64 cc_mkdec(u64 val)
 {
 	return val;
 }
+static inline void cc_random_init(void) { }
 #endif
 
 #endif /* _ASM_X86_COCO_H */

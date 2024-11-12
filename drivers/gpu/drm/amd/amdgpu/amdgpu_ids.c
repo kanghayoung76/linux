@@ -62,9 +62,8 @@ int amdgpu_pasid_alloc(unsigned int bits)
 	int pasid = -EINVAL;
 
 	for (bits = min(bits, 31U); bits > 0; bits--) {
-		pasid = ida_simple_get(&amdgpu_pasid_ida,
-				       1U << (bits - 1), 1U << bits,
-				       GFP_KERNEL);
+		pasid = ida_alloc_range(&amdgpu_pasid_ida, 1U << (bits - 1),
+					(1U << bits) - 1, GFP_KERNEL);
 		if (pasid != -ENOSPC)
 			break;
 	}
@@ -82,7 +81,7 @@ int amdgpu_pasid_alloc(unsigned int bits)
 void amdgpu_pasid_free(u32 pasid)
 {
 	trace_amdgpu_pasid_freed(pasid);
-	ida_simple_remove(&amdgpu_pasid_ida, pasid);
+	ida_free(&amdgpu_pasid_ida, pasid);
 }
 
 static void amdgpu_pasid_free_cb(struct dma_fence *fence,
@@ -188,7 +187,6 @@ static bool amdgpu_vmid_compatible(struct amdgpu_vmid *id,
 /**
  * amdgpu_vmid_grab_idle - grab idle VMID
  *
- * @vm: vm to allocate id for
  * @ring: ring we want to submit job to
  * @idle: resulting idle VMID
  * @fence: fence to wait for if no id could be grabbed
@@ -196,8 +194,7 @@ static bool amdgpu_vmid_compatible(struct amdgpu_vmid *id,
  * Try to find an idle VMID, if none is idle add a fence to wait to the sync
  * object. Returns -ENOMEM when we are out of memory.
  */
-static int amdgpu_vmid_grab_idle(struct amdgpu_vm *vm,
-				 struct amdgpu_ring *ring,
+static int amdgpu_vmid_grab_idle(struct amdgpu_ring *ring,
 				 struct amdgpu_vmid **idle,
 				 struct dma_fence **fence)
 {
@@ -293,17 +290,35 @@ static int amdgpu_vmid_grab_reserved(struct amdgpu_vm *vm,
 	     !dma_fence_is_signaled((*id)->last_flush))) {
 		struct dma_fence *tmp;
 
-		/* Don't use per engine and per process VMID at the same time */
-		if (adev->vm_manager.concurrent_flush)
-			ring = NULL;
-
-		/* to prevent one context starved by another context */
-		(*id)->pd_gpu_addr = 0;
-		tmp = amdgpu_sync_peek_fence(&(*id)->active, ring);
-		if (tmp) {
+		/* Wait for the gang to be assembled before using a
+		 * reserved VMID or otherwise the gang could deadlock.
+		 */
+		tmp = amdgpu_device_get_gang(adev);
+		if (!dma_fence_is_signaled(tmp) && tmp != job->gang_submit) {
 			*id = NULL;
-			*fence = dma_fence_get(tmp);
+			*fence = tmp;
 			return 0;
+		}
+		dma_fence_put(tmp);
+
+		/* Make sure the id is owned by the gang before proceeding */
+		if (!job->gang_submit ||
+		    (*id)->owner != vm->immediate.fence_context) {
+
+			/* Don't use per engine and per process VMID at the
+			 * same time
+			 */
+			if (adev->vm_manager.concurrent_flush)
+				ring = NULL;
+
+			/* to prevent one context starved by another context */
+			(*id)->pd_gpu_addr = 0;
+			tmp = amdgpu_sync_peek_fence(&(*id)->active, ring);
+			if (tmp) {
+				*id = NULL;
+				*fence = dma_fence_get(tmp);
+				return 0;
+			}
 		}
 		needs_flush = true;
 	}
@@ -405,11 +420,11 @@ int amdgpu_vmid_grab(struct amdgpu_vm *vm, struct amdgpu_ring *ring,
 	int r = 0;
 
 	mutex_lock(&id_mgr->lock);
-	r = amdgpu_vmid_grab_idle(vm, ring, &idle, fence);
+	r = amdgpu_vmid_grab_idle(ring, &idle, fence);
 	if (r || !idle)
 		goto error;
 
-	if (vm->reserved_vmid[vmhub]) {
+	if (amdgpu_vmid_uses_reserved(adev, vm, vmhub)) {
 		r = amdgpu_vmid_grab_reserved(vm, ring, job, &id, fence);
 		if (r || !id)
 			goto error;
@@ -459,15 +474,29 @@ error:
 	return r;
 }
 
+/*
+ * amdgpu_vmid_uses_reserved - check if a VM will use a reserved VMID
+ * @adev: amdgpu_device pointer
+ * @vm: the VM to check
+ * @vmhub: the VMHUB which will be used
+ *
+ * Returns: True if the VM will use a reserved VMID.
+ */
+bool amdgpu_vmid_uses_reserved(struct amdgpu_device *adev,
+			       struct amdgpu_vm *vm, unsigned int vmhub)
+{
+	return vm->reserved_vmid[vmhub] ||
+		(adev->enforce_isolation[(vm->root.bo->xcp_id != AMDGPU_XCP_NO_PARTITION) ?
+					 vm->root.bo->xcp_id : 0] &&
+		 AMDGPU_IS_GFXHUB(vmhub));
+}
+
 int amdgpu_vmid_alloc_reserved(struct amdgpu_device *adev,
-			       struct amdgpu_vm *vm,
 			       unsigned vmhub)
 {
 	struct amdgpu_vmid_mgr *id_mgr = &adev->vm_manager.id_mgr[vmhub];
 
 	mutex_lock(&id_mgr->lock);
-	if (vm->reserved_vmid[vmhub])
-		goto unlock;
 
 	++id_mgr->reserved_use_count;
 	if (!id_mgr->reserved) {
@@ -479,27 +508,23 @@ int amdgpu_vmid_alloc_reserved(struct amdgpu_device *adev,
 		list_del_init(&id->list);
 		id_mgr->reserved = id;
 	}
-	vm->reserved_vmid[vmhub] = true;
 
-unlock:
 	mutex_unlock(&id_mgr->lock);
 	return 0;
 }
 
 void amdgpu_vmid_free_reserved(struct amdgpu_device *adev,
-			       struct amdgpu_vm *vm,
 			       unsigned vmhub)
 {
 	struct amdgpu_vmid_mgr *id_mgr = &adev->vm_manager.id_mgr[vmhub];
 
 	mutex_lock(&id_mgr->lock);
-	if (vm->reserved_vmid[vmhub] &&
-	    !--id_mgr->reserved_use_count) {
+	if (!--id_mgr->reserved_use_count) {
 		/* give the reserved ID back to normal round robin */
 		list_add(&id_mgr->reserved->list, &id_mgr->ids_lru);
 		id_mgr->reserved = NULL;
 	}
-	vm->reserved_vmid[vmhub] = false;
+
 	mutex_unlock(&id_mgr->lock);
 }
 
@@ -577,6 +602,11 @@ void amdgpu_vmid_mgr_init(struct amdgpu_device *adev)
 			amdgpu_sync_create(&id_mgr->ids[j].active);
 			list_add_tail(&id_mgr->ids[j].list, &id_mgr->ids_lru);
 		}
+	}
+	/* alloc a default reserved vmid to enforce isolation */
+	for (i = 0; i < (adev->xcp_mgr ? adev->xcp_mgr->num_xcps : 1); i++) {
+		if (adev->enforce_isolation[i])
+			amdgpu_vmid_alloc_reserved(adev, AMDGPU_GFXHUB(i));
 	}
 }
 

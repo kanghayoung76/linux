@@ -643,7 +643,8 @@ static int bcm_setup(struct hci_uart *hu)
 	 * Allow the bootloader to set a valid address through the
 	 * device tree.
 	 */
-	set_bit(HCI_QUIRK_USE_BDADDR_PROPERTY, &hu->hdev->quirks);
+	if (test_bit(HCI_QUIRK_INVALID_BDADDR, &hu->hdev->quirks))
+		set_bit(HCI_QUIRK_USE_BDADDR_PROPERTY, &hu->hdev->quirks);
 
 	if (!bcm_request_irq(bcm))
 		err = bcm_setup_sleep(hu);
@@ -1292,7 +1293,7 @@ static int bcm_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int bcm_remove(struct platform_device *pdev)
+static void bcm_remove(struct platform_device *pdev)
 {
 	struct bcm_device *dev = platform_get_drvdata(pdev);
 
@@ -1301,8 +1302,6 @@ static int bcm_remove(struct platform_device *pdev)
 	mutex_unlock(&bcm_device_lock);
 
 	dev_info(&pdev->dev, "%s device unregistered.\n", dev->name);
-
-	return 0;
 }
 
 static const struct hci_uart_proto bcm_proto = {
@@ -1486,7 +1485,7 @@ static const struct acpi_device_id bcm_acpi_match[] = {
 	{ "BCM2EA1" },
 	{ "BCM2EA2", (long)&bcm43430_device_data },
 	{ "BCM2EA3", (long)&bcm43430_device_data },
-	{ "BCM2EA4" },
+	{ "BCM2EA4", (long)&bcm43430_device_data }, /* bcm43455 */
 	{ "BCM2EA5" },
 	{ "BCM2EA6" },
 	{ "BCM2EA7" },
@@ -1508,7 +1507,7 @@ static const struct dev_pm_ops bcm_pm_ops = {
 
 static struct platform_driver bcm_driver = {
 	.probe = bcm_probe,
-	.remove = bcm_remove,
+	.remove_new = bcm_remove,
 	.driver = {
 		.name = "hci_bcm",
 		.acpi_match_table = ACPI_PTR(bcm_acpi_match),

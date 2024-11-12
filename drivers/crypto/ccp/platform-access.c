@@ -67,6 +67,11 @@ int psp_send_platform_access_msg(enum psp_platform_access_msg msg,
 		return -ENODEV;
 
 	pa_dev = psp->platform_access_data;
+
+	if (!pa_dev->vdata->cmdresp_reg || !pa_dev->vdata->cmdbuff_addr_lo_reg ||
+	    !pa_dev->vdata->cmdbuff_addr_hi_reg)
+		return -ENODEV;
+
 	cmd = psp->io_regs + pa_dev->vdata->cmdresp_reg;
 	lo = psp->io_regs + pa_dev->vdata->cmdbuff_addr_lo_reg;
 	hi = psp->io_regs + pa_dev->vdata->cmdbuff_addr_hi_reg;
@@ -113,9 +118,16 @@ int psp_send_platform_access_msg(enum psp_platform_access_msg msg,
 		goto unlock;
 	}
 
-	/* Store the status in request header for caller to investigate */
+	/*
+	 * Read status from PSP. If status is non-zero, it indicates an error
+	 * occurred during "processing" of the command.
+	 * If status is zero, it indicates the command was "processed"
+	 * successfully, but the result of the command is in the payload.
+	 * Return both cases to the caller as -EIO to investigate.
+	 */
 	cmd_reg = ioread32(cmd);
-	req->header.status = FIELD_GET(PSP_CMDRESP_STS, cmd_reg);
+	if (FIELD_GET(PSP_CMDRESP_STS, cmd_reg))
+		req->header.status = FIELD_GET(PSP_CMDRESP_STS, cmd_reg);
 	if (req->header.status) {
 		ret = -EIO;
 		goto unlock;

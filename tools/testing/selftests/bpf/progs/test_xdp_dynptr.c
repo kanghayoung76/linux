@@ -2,6 +2,7 @@
 /* Copyright (c) 2022 Meta */
 #include <stddef.h>
 #include <string.h>
+#include <stdbool.h>
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
@@ -17,11 +18,11 @@
 #include "test_iptunnel_common.h"
 #include "bpf_kfuncs.h"
 
-const size_t tcphdr_sz = sizeof(struct tcphdr);
-const size_t udphdr_sz = sizeof(struct udphdr);
-const size_t ethhdr_sz = sizeof(struct ethhdr);
-const size_t iphdr_sz = sizeof(struct iphdr);
-const size_t ipv6hdr_sz = sizeof(struct ipv6hdr);
+#define tcphdr_sz sizeof(struct tcphdr)
+#define udphdr_sz sizeof(struct udphdr)
+#define ethhdr_sz sizeof(struct ethhdr)
+#define iphdr_sz sizeof(struct iphdr)
+#define ipv6hdr_sz sizeof(struct ipv6hdr)
 
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);

@@ -6,6 +6,7 @@
  * Used by Master driver
  */
 
+#include <linux/cleanup.h>
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/debugfs.h>
@@ -283,6 +284,29 @@ static int cdns_config_update(struct sdw_cdns *cdns)
 	return ret;
 }
 
+/**
+ * sdw_cdns_config_update() - Update configurations
+ * @cdns: Cadence instance
+ */
+void sdw_cdns_config_update(struct sdw_cdns *cdns)
+{
+	/* commit changes */
+	cdns_writel(cdns, CDNS_MCP_CONFIG_UPDATE, CDNS_MCP_CONFIG_UPDATE_BIT);
+}
+EXPORT_SYMBOL(sdw_cdns_config_update);
+
+/**
+ * sdw_cdns_config_update_set_wait() - wait until configuration update bit is self-cleared
+ * @cdns: Cadence instance
+ */
+int sdw_cdns_config_update_set_wait(struct sdw_cdns *cdns)
+{
+	/* the hardware recommendation is to wait at least 300us */
+	return cdns_set_wait(cdns, CDNS_MCP_CONFIG_UPDATE,
+			     CDNS_MCP_CONFIG_UPDATE_BIT, 0);
+}
+EXPORT_SYMBOL(sdw_cdns_config_update_set_wait);
+
 /*
  * debugfs
  */
@@ -300,12 +324,11 @@ static ssize_t cdns_sprintf(struct sdw_cdns *cdns,
 static int cdns_reg_show(struct seq_file *s, void *data)
 {
 	struct sdw_cdns *cdns = s->private;
-	char *buf;
 	ssize_t ret;
 	int num_ports;
 	int i, j;
 
-	buf = kzalloc(RD_BUF, GFP_KERNEL);
+	char *buf __free(kfree) = kzalloc(RD_BUF, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 
@@ -366,7 +389,6 @@ static int cdns_reg_show(struct seq_file *s, void *data)
 		ret += cdns_sprintf(cdns, buf, ret, CDNS_PDI_CONFIG(i));
 
 	seq_printf(s, "%s", buf);
-	kfree(buf);
 
 	return 0;
 }
@@ -433,9 +455,9 @@ static int cdns_parity_error_injection(void *data, u64 value)
 			CDNS_IP_MCP_CMDCTRL_INSERT_PARITY_ERR);
 
 	/* commit changes */
-	cdns_updatel(cdns, CDNS_MCP_CONFIG_UPDATE,
-		     CDNS_MCP_CONFIG_UPDATE_BIT,
-		     CDNS_MCP_CONFIG_UPDATE_BIT);
+	ret = cdns_clear_bit(cdns, CDNS_MCP_CONFIG_UPDATE, CDNS_MCP_CONFIG_UPDATE_BIT);
+	if (ret < 0)
+		goto unlock;
 
 	/* do a broadcast dummy read to avoid bus clashes */
 	ret = sdw_bread_no_pm_unlocked(&cdns->bus, 0xf, SDW_SCP_DEVID_0);
@@ -447,15 +469,16 @@ static int cdns_parity_error_injection(void *data, u64 value)
 			0);
 
 	/* commit changes */
-	cdns_updatel(cdns, CDNS_MCP_CONFIG_UPDATE,
-		     CDNS_MCP_CONFIG_UPDATE_BIT,
-		     CDNS_MCP_CONFIG_UPDATE_BIT);
-
-	/* Continue bus operation with parity error injection disabled */
-	mutex_unlock(&bus->bus_lock);
+	ret = cdns_clear_bit(cdns, CDNS_MCP_CONFIG_UPDATE, CDNS_MCP_CONFIG_UPDATE_BIT);
+	if (ret < 0)
+		goto unlock;
 
 	/* Userspace changed the hardware state behind the kernel's back */
 	add_taint(TAINT_USER, LOCKDEP_STILL_OK);
+
+unlock:
+	/* Continue bus operation with parity error injection disabled */
+	mutex_unlock(&bus->bus_lock);
 
 	/*
 	 * allow Master device to enter pm_runtime suspend. This may
@@ -867,8 +890,14 @@ static int cdns_update_slave_status(struct sdw_cdns *cdns,
 		}
 	}
 
-	if (is_slave)
-		return sdw_handle_slave_status(&cdns->bus, status);
+	if (is_slave) {
+		int ret;
+
+		mutex_lock(&cdns->status_update_lock);
+		ret = sdw_handle_slave_status(&cdns->bus, status);
+		mutex_unlock(&cdns->status_update_lock);
+		return ret;
+	}
 
 	return 0;
 }
@@ -964,6 +993,31 @@ irqreturn_t sdw_cdns_irq(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 EXPORT_SYMBOL(sdw_cdns_irq);
+
+static void cdns_check_attached_status_dwork(struct work_struct *work)
+{
+	struct sdw_cdns *cdns =
+		container_of(work, struct sdw_cdns, attach_dwork.work);
+	enum sdw_slave_status status[SDW_MAX_DEVICES + 1];
+	u32 val;
+	int ret;
+	int i;
+
+	val = cdns_readl(cdns, CDNS_MCP_SLAVE_STAT);
+
+	for (i = 0; i <= SDW_MAX_DEVICES; i++) {
+		status[i] = val & 0x3;
+		if (status[i])
+			dev_dbg(cdns->dev, "Peripheral %d status: %d\n", i, status[i]);
+		val >>= 2;
+	}
+
+	mutex_lock(&cdns->status_update_lock);
+	ret = sdw_handle_slave_status(&cdns->bus, status);
+	mutex_unlock(&cdns->status_update_lock);
+	if (ret < 0)
+		dev_err(cdns->dev, "%s: sdw_handle_slave_status failed: %d\n", __func__, ret);
+}
 
 /**
  * cdns_update_slave_status_work - update slave status in a work since we will need to handle
@@ -1116,13 +1170,7 @@ int sdw_cdns_exit_reset(struct sdw_cdns *cdns)
 		     CDNS_MCP_CONTROL_HW_RST);
 
 	/* commit changes */
-	cdns_updatel(cdns, CDNS_MCP_CONFIG_UPDATE,
-		     CDNS_MCP_CONFIG_UPDATE_BIT,
-		     CDNS_MCP_CONFIG_UPDATE_BIT);
-
-	/* don't wait here */
-	return 0;
-
+	return cdns_config_update(cdns);
 }
 EXPORT_SYMBOL(sdw_cdns_exit_reset);
 
@@ -1218,7 +1266,7 @@ EXPORT_SYMBOL(sdw_cdns_enable_interrupt);
 
 static int cdns_allocate_pdi(struct sdw_cdns *cdns,
 			     struct sdw_cdns_pdi **stream,
-			     u32 num, u32 pdi_offset)
+			     u32 num)
 {
 	struct sdw_cdns_pdi *pdi;
 	int i;
@@ -1231,7 +1279,7 @@ static int cdns_allocate_pdi(struct sdw_cdns *cdns,
 		return -ENOMEM;
 
 	for (i = 0; i < num; i++) {
-		pdi[i].num = i + pdi_offset;
+		pdi[i].num = i;
 	}
 
 	*stream = pdi;
@@ -1248,7 +1296,6 @@ int sdw_cdns_pdi_init(struct sdw_cdns *cdns,
 		      struct sdw_cdns_stream_config config)
 {
 	struct sdw_cdns_streams *stream;
-	int offset;
 	int ret;
 
 	cdns->pcm.num_bd = config.pcm_bd;
@@ -1259,24 +1306,15 @@ int sdw_cdns_pdi_init(struct sdw_cdns *cdns,
 	stream = &cdns->pcm;
 
 	/* we allocate PDI0 and PDI1 which are used for Bulk */
-	offset = 0;
-
-	ret = cdns_allocate_pdi(cdns, &stream->bd,
-				stream->num_bd, offset);
+	ret = cdns_allocate_pdi(cdns, &stream->bd, stream->num_bd);
 	if (ret)
 		return ret;
 
-	offset += stream->num_bd;
-
-	ret = cdns_allocate_pdi(cdns, &stream->in,
-				stream->num_in, offset);
+	ret = cdns_allocate_pdi(cdns, &stream->in, stream->num_in);
 	if (ret)
 		return ret;
 
-	offset += stream->num_in;
-
-	ret = cdns_allocate_pdi(cdns, &stream->out,
-				stream->num_out, offset);
+	ret = cdns_allocate_pdi(cdns, &stream->out, stream->num_out);
 	if (ret)
 		return ret;
 
@@ -1310,6 +1348,12 @@ static void cdns_init_clock_ctrl(struct sdw_cdns *cdns)
 	u32 val;
 	u32 ssp_interval;
 	int divider;
+
+	dev_dbg(cdns->dev, "mclk %d max %d row %d col %d\n",
+		prop->mclk_freq,
+		prop->max_clk_freq,
+		prop->default_row,
+		prop->default_col);
 
 	/* Set clock divider */
 	divider	= (prop->mclk_freq / prop->max_clk_freq) - 1;
@@ -1727,7 +1771,11 @@ int sdw_cdns_probe(struct sdw_cdns *cdns)
 	init_completion(&cdns->tx_complete);
 	cdns->bus.port_ops = &cdns_port_ops;
 
+	mutex_init(&cdns->status_update_lock);
+
 	INIT_WORK(&cdns->work, cdns_update_slave_status_work);
+	INIT_DELAYED_WORK(&cdns->attach_dwork, cdns_check_attached_status_dwork);
+
 	return 0;
 }
 EXPORT_SYMBOL(sdw_cdns_probe);
@@ -1784,7 +1832,6 @@ EXPORT_SYMBOL(cdns_set_sdw_stream);
  * cdns_find_pdi() - Find a free PDI
  *
  * @cdns: Cadence instance
- * @offset: Starting offset
  * @num: Number of PDIs
  * @pdi: PDI instances
  * @dai_id: DAI id
@@ -1793,14 +1840,13 @@ EXPORT_SYMBOL(cdns_set_sdw_stream);
  * expected to match, return NULL otherwise.
  */
 static struct sdw_cdns_pdi *cdns_find_pdi(struct sdw_cdns *cdns,
-					  unsigned int offset,
 					  unsigned int num,
 					  struct sdw_cdns_pdi *pdi,
 					  int dai_id)
 {
 	int i;
 
-	for (i = offset; i < offset + num; i++)
+	for (i = 0; i < num; i++)
 		if (pdi[i].num == dai_id)
 			return &pdi[i];
 
@@ -1854,15 +1900,15 @@ struct sdw_cdns_pdi *sdw_cdns_alloc_pdi(struct sdw_cdns *cdns,
 	struct sdw_cdns_pdi *pdi = NULL;
 
 	if (dir == SDW_DATA_DIR_RX)
-		pdi = cdns_find_pdi(cdns, 0, stream->num_in, stream->in,
+		pdi = cdns_find_pdi(cdns, stream->num_in, stream->in,
 				    dai_id);
 	else
-		pdi = cdns_find_pdi(cdns, 0, stream->num_out, stream->out,
+		pdi = cdns_find_pdi(cdns, stream->num_out, stream->out,
 				    dai_id);
 
 	/* check if we found a PDI, else find in bi-directional */
 	if (!pdi)
-		pdi = cdns_find_pdi(cdns, 2, stream->num_bd, stream->bd,
+		pdi = cdns_find_pdi(cdns, stream->num_bd, stream->bd,
 				    dai_id);
 
 	if (pdi) {

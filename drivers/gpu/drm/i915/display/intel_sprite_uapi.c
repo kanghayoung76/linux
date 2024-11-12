@@ -74,7 +74,7 @@ int intel_sprite_set_colorkey_ioctl(struct drm_device *dev, void *data,
 	 * pipe simultaneously.
 	 */
 	if (DISPLAY_VER(dev_priv) >= 9 &&
-	    to_intel_plane(plane)->id >= PLANE_SPRITE1 &&
+	    to_intel_plane(plane)->id >= PLANE_3 &&
 	    set->flags & I915_SET_COLORKEY_DESTINATION)
 		return -EINVAL;
 
@@ -86,6 +86,7 @@ int intel_sprite_set_colorkey_ioctl(struct drm_device *dev, void *data,
 		goto out;
 	}
 	state->acquire_ctx = &ctx;
+	to_intel_atomic_state(state)->internal = true;
 
 	while (1) {
 		plane_state = drm_atomic_get_plane_state(state, plane);
