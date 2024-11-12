@@ -27,6 +27,18 @@ ENTRY(_start)
 
 jiffies = jiffies_64;
 
+#ifdef CONFIG_GENESIS
+#define GENESIS_TEXT                    \
+        ALIGN_FUNCTION();               \
+        __genesis_text_begin = .;       \
+        *(.genesis.text)                \
+        __genesis_text_end = .;
+
+#else
+#define GENESIS_TEXT
+#endif
+
+
 SECTIONS
 {
 	/* Beginning of code and text segment */
@@ -45,6 +57,7 @@ SECTIONS
 		ENTRY_TEXT
 		IRQENTRY_TEXT
 		SOFTIRQENTRY_TEXT
+		GENESIS_TEXT
 		_etext = .;
 	}
 

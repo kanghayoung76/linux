@@ -7,6 +7,14 @@
 #include <linux/mmzone.h>
 #include <linux/topology.h>
 
+#ifdef CONFIG_GENESIS
+#define ___GFP_GENESIS          0x10000000u
+#else
+#define ___GFP_GENESIS          0
+#endif
+#define __GFP_GENESIS   ((__force gfp_t)___GFP_GENESIS)
+
+
 struct vm_area_struct;
 
 /* Convert GFP flags to their corresponding migrate type */

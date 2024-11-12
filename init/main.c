@@ -1084,6 +1084,11 @@ asmlinkage __visible void __init __no_sanitize_address __noreturn start_kernel(v
 	arch_post_acpi_subsys_init();
 	kcsan_init();
 
+#ifdef CONFIG_GENESIS
+        extern void genesis_init(void);
+        genesis_init();
+#endif
+
 	/* Do the rest non-__init'ed, we're now alive */
 	arch_call_rest_init();
 
