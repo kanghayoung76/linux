@@ -10,6 +10,7 @@
 
 #include <asm/asm-extable.h>
 #include <asm/pgtable.h>		/* for TASK_SIZE */
+#include <asm/genesis.h>
 
 /*
  * User space memory access functions
@@ -133,6 +134,30 @@ do {								\
 		BUILD_BUG();					\
 	}							\
 } while (0)
+
+#if defined(CONFIG_GENESIS) && (GENESIS_INTERCEPT_UACCESS)
+#define __get_user_check(x, __gu_ptr, __gu_err)         \
+if ((unsigned long)__gu_ptr >= TASK_SIZE)                       \
+        BUG();                                                  \
+do {                                                            \
+        switch (sizeof(*__gu_ptr)) {                            \
+        case 1:                                                 \
+                __get_user_asm("lb", (x), __gu_ptr, __gu_err);  \
+                break;                                          \
+        case 2:                                                 \
+                __get_user_asm("lh", (x), __gu_ptr, __gu_err);  \
+                break;                                          \
+        case 4:                                                 \
+                __get_user_asm("lw", (x), __gu_ptr, __gu_err);  \
+                break;                                          \
+        case 8:                                                 \
+                __get_user_8((x), __gu_ptr, __gu_err);          \
+                break;                                          \
+        default:                                                \
+                BUILD_BUG();                                    \
+        }                                                       \
+} while (0)
+#endif
 
 /**
  * __get_user: - Get a simple variable from user space, with less checking.
