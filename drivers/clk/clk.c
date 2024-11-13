@@ -1424,6 +1424,7 @@ static int __init clk_disable_unused(void)
 
 	clk_prepare_unlock();
 
+	pr_info("clk: Disabling unused clocks, return success\n");
 	return 0;
 }
 late_initcall_sync(clk_disable_unused);

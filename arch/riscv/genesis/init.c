@@ -49,15 +49,19 @@ void __init genesis_test(void)
 	pr_info("addr: %px, shadow_addr: %lx\n", p3, __virt_to_shadow(p3));
 	*p3 = 1234; // okay
 	shadow_p3 = (int *)__virt_to_shadow(p3);
+        unsigned long sstatus;
+        __asm__ __volatile__ ("csrr %0, sstatus" : "=r" (sstatus));
+        pr_info("sstatus : 0x%px\n",sstatus);
 	__enable_user_access();
-/*
+        __asm__ __volatile__ ("csrr %0, sstatus" : "=r" (sstatus));
+        pr_info("sstatus : 0x%px\n",sstatus);
+	pr_info("addr val: %d, shadow val: %d\n", *p3, *shadow_p3);
 	*shadow_p3 = 12345;
 	pr_info("addr val: %d, shadow val: %d\n", *p3, *shadow_p3);
 	__disable_user_access();
 	free_page((unsigned long int)p3);
 
 	pr_info("[GENESIS] TEST CODE END\n");
-*/
 }
 
 void __init genesis_zone_set_readonly(void)
@@ -95,5 +99,5 @@ void __init genesis_init(void)
 
 	genesis_enabled = 1;
 
-//	genesis_zone_set_readonly();
+	genesis_zone_set_readonly();
 }
