@@ -78,7 +78,7 @@ void __init genesis_zone_set_readonly(void)
 		"0x%lx - 0x%lx\n", base, base + (numpages << PAGE_SHIFT));
 #endif
 
-	ret = set_memory_ro(base, numpages);
+	ret = set_memory_rw(base, numpages);
 	if (ret)
 		panic("[GENESIS] failed to mark readonly!");
 }

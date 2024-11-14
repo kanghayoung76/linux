@@ -36,7 +36,13 @@ void suspend_restore_csrs(struct suspend_context *context)
 	csr_write(CSR_IE, context->ie);
 
 #ifdef CONFIG_MMU
-	csr_write(CSR_SATP, context->satp);
+#ifndef CONFIG_GENESIS
+        csr_write(CSR_SATP, context->satp);
+#else
+        _genesis_entry(/*svc_num*/ GENESIS_WRITE_SATP,
+                       /*arg0*/ context->satp,
+                       /*arg1*/ 0);
+#endif
 #endif
 }
 
