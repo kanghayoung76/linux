@@ -584,7 +584,13 @@ static inline int ptep_test_and_clear_young(struct vm_area_struct *vma,
 static inline void ptep_set_wrprotect(struct mm_struct *mm,
 				      unsigned long address, pte_t *ptep)
 {
-	atomic_long_and(~(unsigned long)_PAGE_WRITE, (atomic_long_t *)ptep);
+#ifndef CONFIG_GENESIS
+        atomic_long_and(~(unsigned long)_PAGE_WRITE, (atomic_long_t *)ptep);
+#else
+        _genesis_entry(/*svc_num*/ GENESIS_SET_WRPROTECT_PTE,
+                       /*arg0*/ (unsigned long)ptep,
+                       /*arg1*/ 0);
+#endif
 }
 
 #define __HAVE_ARCH_PTEP_CLEAR_YOUNG_FLUSH

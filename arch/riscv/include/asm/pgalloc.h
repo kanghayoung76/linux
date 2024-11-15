@@ -158,24 +158,36 @@ static inline void sync_kernel_mappings(pgd_t *pgd)
 	       (PTRS_PER_PGD - USER_PTRS_PER_PGD) * sizeof(pgd_t));
 }
 
+#ifndef CONFIG_GENESIS
 static inline pgd_t *pgd_alloc(struct mm_struct *mm)
 {
 	pgd_t *pgd;
 
-//	pgd = (pgd_t *)__get_free_page(GFP_KERNEL);
-	pgd = (pgd_t *)__get_free_page(__GFP_GENESIS);
+	pgd = (pgd_t *)__get_free_page(GFP_KERNEL);
+
 	if (likely(pgd != NULL)) {
-/*
 		memset(pgd, 0, USER_PTRS_PER_PGD * sizeof(pgd_t));
-		* Copy kernel mappings *
+	//		* Copy kernel mappings *
 		sync_kernel_mappings(pgd);
-*/
-                _genesis_entry(/*svc_num*/ GENESIS_INIT_PGD,
-                               /*arg0*/ (unsigned long)pgd,
-                               /*arg1*/0);
 	}
 	return pgd;
 }
+#else
+static inline pgd_t *pgd_alloc(struct mm_struct *mm)
+{
+        pgd_t *pgd;
+
+        pgd = (pgd_t *)__get_free_page(__GFP_GENESIS);
+
+        if (likely(pgd != NULL)) {
+                _genesis_entry(/*svc_num*/ GENESIS_INIT_PGD,
+                               /*arg0*/ (unsigned long)pgd,
+                               /*arg1*/0);
+        }
+
+        return pgd;
+}
+#endif
 
 #ifndef __PAGETABLE_PMD_FOLDED
 
