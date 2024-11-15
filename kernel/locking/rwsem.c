@@ -1516,7 +1516,7 @@ static inline bool is_rwsem_reader_owned(struct rw_semaphore *sem)
  */
 void __sched down_read(struct rw_semaphore *sem)
 {
-	might_sleep();
+	//might_sleep();
 	rwsem_acquire_read(&sem->dep_map, 0, 0, _RET_IP_);
 
 	LOCK_CONTENDED(sem, __down_read_trylock, __down_read);

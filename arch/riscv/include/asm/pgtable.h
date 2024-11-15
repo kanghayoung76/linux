@@ -550,7 +550,14 @@ static inline int ptep_set_access_flags(struct vm_area_struct *vma,
 static inline pte_t ptep_get_and_clear(struct mm_struct *mm,
 				       unsigned long address, pte_t *ptep)
 {
-	pte_t pte = __pte(atomic_long_xchg((atomic_long_t *)ptep, 0));
+#ifndef CONFIG_GENESIS
+        pte_t pte = __pte(atomic_long_xchg((atomic_long_t *)ptep, 0));
+#else
+        pte_t pte;
+        pte = __pte(_genesis_entry(/*svc_num*/ GENESIS_GET_AND_CLEAR_PTE,
+                                   /*arg0*/ (unsigned long)ptep,
+                                   /*arg1*/ 0));
+#endif
 
 	page_table_check_pte_clear(mm, address, pte);
 
@@ -564,7 +571,13 @@ static inline int ptep_test_and_clear_young(struct vm_area_struct *vma,
 {
 	if (!pte_young(*ptep))
 		return 0;
-	return test_and_clear_bit(_PAGE_ACCESSED_OFFSET, &pte_val(*ptep));
+#ifndef CONFIG_GENESIS
+        return test_and_clear_bit(_PAGE_ACCESSED_OFFSET, &pte_val(*ptep));
+#else
+        return _genesis_entry(/*svc*/ GENESIS_TEST_AND_CLEAR_YOUNG_PTE,
+                              /*arg0*/ (unsigned long)ptep,
+                              /*arg1*/ 0);
+#endif
 }
 
 #define __HAVE_ARCH_PTEP_SET_WRPROTECT
