@@ -32,7 +32,13 @@ void suspend_save_csrs(struct suspend_context *context)
 void suspend_restore_csrs(struct suspend_context *context)
 {
 	csr_write(CSR_SCRATCH, context->scratch);
-	csr_write(CSR_TVEC, context->tvec);
+#ifndef CONFIG_GENESIS
+        csr_write(CSR_TVEC, context->tvec);
+#else
+        _genesis_entry(/*svc_num*/ GENESIS_WRITE_TVEC,
+                       /*arg0*/ context->tvec,
+                       /*arg1*/ 0);
+#endif
 	csr_write(CSR_IE, context->ie);
 
 #ifdef CONFIG_MMU
