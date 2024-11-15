@@ -33,6 +33,7 @@
 #include <asm/ptdump.h>
 #include <asm/numa.h>
 #include <asm/genesis.h>
+#include <asm/uaccess.h>
 
 #include "../kernel/head.h"
 
@@ -677,15 +678,36 @@ void __init create_pgd_mapping(pgd_t *pgdp,
 
 	if (sz == PGDIR_SIZE) {
 		if (pgd_val(pgdp[pgd_idx]) == 0)
-			pgdp[pgd_idx] = pfn_pgd(PFN_DOWN(pa), prot);
+#ifndef CONFIG_GENESIS
+                        pgdp[pgd_idx] = pfn_pgd(PFN_DOWN(pa), prot);
+#else
+                        pgdp[pgd_idx] = pfn_pgd(PFN_DOWN(pa), prot);
+//                        _genesis_entry(/*svc_num*/ GENESIS_SET_PGD,
+//                                       /*arg0*/ (unsigned long)&pgdp[pgd_idx],
+//                                       /*arg1*/ (unsigned long)pgd_val(pfn_pgd(PFN_DOWN(pa), prot)));
+#endif
 		return;
 	}
 
 	if (pgd_val(pgdp[pgd_idx]) == 0) {
 		next_phys = alloc_pgd_next(va);
-		pgdp[pgd_idx] = pfn_pgd(PFN_DOWN(next_phys), PAGE_TABLE);
+#ifndef CONFIG_GENESIS
+                pgdp[pgd_idx] = pfn_pgd(PFN_DOWN(next_phys), PAGE_TABLE);
+#else
+                pgdp[pgd_idx] = pfn_pgd(PFN_DOWN(next_phys), PAGE_TABLE);
+//                _genesis_entry(GENESIS_SET_PGD,
+//                               (unsigned long)&pgdp[pgd_idx],
+//                               (unsigned long)pgd_val(pfn_pgd(PFN_DOWN(next_phys), PAGE_TABLE)));
+#endif
 		nextp = get_pgd_next_virt(next_phys);
-		memset(nextp, 0, PAGE_SIZE);
+#ifndef CONFIG_GENESIS
+                memset(nextp, 0, PAGE_SIZE);
+#else
+                memset(nextp, 0, PAGE_SIZE);
+//                _genesis_entry(/*svc_num*/ GENESIS_INIT_P4D,
+//                               /*arg0*/ (unsigned long)nextp,
+//                               /*arg1*/ 0);
+#endif
 	} else {
 		next_phys = PFN_PHYS(_pgd_pfn(pgdp[pgd_idx]));
 		nextp = get_pgd_next_virt(next_phys);
