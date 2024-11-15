@@ -9,6 +9,7 @@
 #include <linux/bits.h>
 #include <linux/const.h>
 #include <asm/errata_list.h>
+#include <asm/genesis.h>
 
 extern bool pgtable_l4_enabled;
 extern bool pgtable_l5_enabled;
@@ -198,7 +199,13 @@ static inline int pud_user(pud_t pud)
 
 static inline void set_pud(pud_t *pudp, pud_t pud)
 {
-	*pudp = pud;
+#ifndef CONFIG_GENESIS
+        *pudp = pud;
+#else
+        _genesis_entry(/*svc_num*/ GENESIS_SET_PUD,
+                       /*arg0*/ (unsigned long)pudp,
+                       /*arg1*/ pud_val(pud));
+#endif
 }
 
 static inline void pud_clear(pud_t *pudp)
@@ -274,7 +281,13 @@ static inline unsigned long _pmd_pfn(pmd_t pmd)
 static inline void set_p4d(p4d_t *p4dp, p4d_t p4d)
 {
 	if (pgtable_l4_enabled)
-		*p4dp = p4d;
+#ifndef CONFIG_GENESIS
+                *p4dp = p4d;
+#else
+                _genesis_entry(/*svc_num*/ GENESIS_SET_P4D,
+                               /*arg0*/ (unsigned long)p4dp,
+                               /*arg1*/ p4d_val(p4d));
+#endif
 	else
 		set_pud((pud_t *)p4dp, (pud_t){ p4d_val(p4d) });
 }
@@ -344,6 +357,17 @@ static inline pud_t *pud_offset(p4d_t *p4d, unsigned long address)
 	return (pud_t *)p4d;
 }
 
+#ifdef CONFIG_GENESIS
+static inline void set_pgd(pgd_t *pgdp, pgd_t pgd)
+{
+        if (pgtable_l5_enabled)
+                _genesis_entry(/*svc_num*/ GENESIS_SET_PGD,
+                               /*arg0*/ (unsigned long)pgdp,
+                               /*arg1*/ pgd_val(pgd));
+        else
+                set_p4d((p4d_t *)pgdp, (p4d_t){ pgd_val(pgd) });
+}
+#else
 static inline void set_pgd(pgd_t *pgdp, pgd_t pgd)
 {
 	if (pgtable_l5_enabled)
@@ -351,6 +375,7 @@ static inline void set_pgd(pgd_t *pgdp, pgd_t pgd)
 	else
 		set_p4d((p4d_t *)pgdp, (p4d_t){ pgd_val(pgd) });
 }
+#endif
 
 static inline int pgd_none(pgd_t pgd)
 {
