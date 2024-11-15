@@ -500,7 +500,11 @@ static void __init pud_clear_tests(struct pgtable_debug_args *args)
 
 	pr_debug("Validating PUD clear\n");
 	pud = __pud(pud_val(pud) | RANDOM_ORVALUE);
-	WRITE_ONCE(*args->pudp, pud);
+#ifndef CONFIG_GENESIS
+        WRITE_ONCE(*args->pudp, pud);
+#else
+        set_pud(args->pudp, pud);
+#endif
 	pud_clear(args->pudp);
 	pud = READ_ONCE(*args->pudp);
 	WARN_ON(!pud_none(pud));
@@ -537,7 +541,11 @@ static void __init p4d_clear_tests(struct pgtable_debug_args *args)
 
 	pr_debug("Validating P4D clear\n");
 	p4d = __p4d(p4d_val(p4d) | RANDOM_ORVALUE);
-	WRITE_ONCE(*args->p4dp, p4d);
+#ifndef CONFIG_GENESIS
+        WRITE_ONCE(*args->p4dp, p4d);
+#else
+        set_p4d(args->p4dp, p4d);
+#endif
 	p4d_clear(args->p4dp);
 	p4d = READ_ONCE(*args->p4dp);
 	WARN_ON(!p4d_none(p4d));
@@ -571,7 +579,11 @@ static void __init pgd_clear_tests(struct pgtable_debug_args *args)
 
 	pr_debug("Validating PGD clear\n");
 	pgd = __pgd(pgd_val(pgd) | RANDOM_ORVALUE);
-	WRITE_ONCE(*args->pgdp, pgd);
+#ifndef CONFIG_GENESIS
+        WRITE_ONCE(*args->pgdp, pgd);
+#else
+        set_pgd(args->pgdp, pgd);
+#endif
 	pgd_clear(args->pgdp);
 	pgd = READ_ONCE(*args->pgdp);
 	WARN_ON(!pgd_none(pgd));
@@ -636,7 +648,11 @@ static void __init pmd_clear_tests(struct pgtable_debug_args *args)
 
 	pr_debug("Validating PMD clear\n");
 	pmd = __pmd(pmd_val(pmd) | RANDOM_ORVALUE);
-	WRITE_ONCE(*args->pmdp, pmd);
+#ifndef CONFIG_GENESIS
+        WRITE_ONCE(*args->pmdp, pmd);
+#else
+        set_pmd(args->pmdp, pmd);
+#endif
 	pmd_clear(args->pmdp);
 	pmd = READ_ONCE(*args->pmdp);
 	WARN_ON(!pmd_none(pmd));
