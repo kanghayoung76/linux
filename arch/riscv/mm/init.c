@@ -406,7 +406,13 @@ static void __init create_pte_mapping(pte_t *ptep,
 	BUG_ON(sz != PAGE_SIZE);
 
 	if (pte_none(ptep[pte_idx]))
-		ptep[pte_idx] = pfn_pte(PFN_DOWN(pa), prot);
+#ifndef CONFIG_GENESIS
+                ptep[pte_idx] = pfn_pte(PFN_DOWN(pa), prot);
+#else
+                _genesis_entry(/*svc_num*/ GENESIS_SET_PTE,
+                               /*arg0*/ (unsigned long)&ptep[pte_idx],
+                               /*arg1*/ (unsigned long)pte_val(pfn_pte(PFN_DOWN(pa), prot)));
+#endif
 }
 
 #ifndef __PAGETABLE_PMD_FOLDED
@@ -474,7 +480,11 @@ static phys_addr_t __init alloc_pmd_late(uintptr_t va)
 {
 	unsigned long vaddr;
 
-	vaddr = __get_free_page(GFP_KERNEL);
+#ifdef CONFIG_GENESIS
+        vaddr = __get_free_page(__GFP_GENESIS);
+#else
+        vaddr = __get_free_page(GFP_KERNEL);
+#endif
 	BUG_ON(!vaddr || !pgtable_pmd_page_ctor(virt_to_page(vaddr)));
 
 	return __pa(vaddr);
