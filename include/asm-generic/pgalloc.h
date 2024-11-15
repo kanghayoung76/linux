@@ -16,10 +16,23 @@
  *
  * Return: pointer to the allocated memory or %NULL on error
  */
+#ifndef CONFIG_GENESIS
 static inline pte_t *__pte_alloc_one_kernel(struct mm_struct *mm)
 {
 	return (pte_t *)__get_free_page(GFP_PGTABLE_KERNEL);
 }
+#else
+static inline pte_t *__pte_alloc_one_kernel(struct mm_struct *mm)
+{
+        pte_t *pte = (pte_t *)__get_free_page(__GFP_GENESIS);
+        if (pte)
+                _genesis_entry(/*svc_num*/ GENESIS_INIT_PTE,
+                               /*arg0*/ (unsigned long)pte,
+                               /*arg1*/ 0);
+        return pte;
+
+}
+#endif
 
 #ifndef __HAVE_ARCH_PTE_ALLOC_ONE_KERNEL
 /**
@@ -68,6 +81,12 @@ static inline pgtable_t __pte_alloc_one(struct mm_struct *mm, gfp_t gfp)
 		return NULL;
 	}
 
+#ifdef CONFIG_GENESIS
+        _genesis_entry(/*svc_num*/ GENESIS_INIT_PTE,
+                       /*arg0*/ (unsigned long)page_address(pte),
+                       /*arg1*/ 0);
+#endif
+
 	return pte;
 }
 
@@ -82,7 +101,11 @@ static inline pgtable_t __pte_alloc_one(struct mm_struct *mm, gfp_t gfp)
  */
 static inline pgtable_t pte_alloc_one(struct mm_struct *mm)
 {
-	return __pte_alloc_one(mm, GFP_PGTABLE_USER);
+#ifndef CONFIG_GENESIS
+        return __pte_alloc_one(mm, GFP_PGTABLE_USER);
+#else
+        return __pte_alloc_one(mm, (__GFP_GENESIS|__GFP_ACCOUNT));
+#endif
 }
 #endif
 
@@ -116,6 +139,7 @@ static inline void pte_free(struct mm_struct *mm, struct page *pte_page)
  *
  * Return: pointer to the allocated memory or %NULL on error
  */
+#ifndef CONFIG_GENESIS
 static inline pmd_t *pmd_alloc_one(struct mm_struct *mm, unsigned long addr)
 {
 	struct page *page;
@@ -132,6 +156,29 @@ static inline pmd_t *pmd_alloc_one(struct mm_struct *mm, unsigned long addr)
 	}
 	return (pmd_t *)page_address(page);
 }
+#else
+static inline pmd_t *pmd_alloc_one(struct mm_struct *mm, unsigned long addr)
+{
+        pmd_t *pmd;
+        struct page *page;
+        gfp_t gfp = __GFP_GENESIS;
+
+        if (mm != &init_mm)
+                gfp |= __GFP_ACCOUNT;
+        page = alloc_pages(gfp, 0);
+        if (!page)
+                return NULL;
+        if (!pgtable_pmd_page_ctor(page)) {
+                __free_pages(page, 0);
+                return NULL;
+        }
+        pmd = (pmd_t *)page_address(page);
+        _genesis_entry(/*svc_num*/ GENESIS_INIT_PMD,
+                       /*arg0*/ (unsigned long)pmd,
+                       /*arg1*/ 0);
+        return pmd;
+}
+#endif /* CONFIG_GENESIS */
 #endif
 
 #ifndef __HAVE_ARCH_PMD_FREE
@@ -147,6 +194,7 @@ static inline void pmd_free(struct mm_struct *mm, pmd_t *pmd)
 
 #if CONFIG_PGTABLE_LEVELS > 3
 
+#ifndef CONFIG_GENESIS
 static inline pud_t *__pud_alloc_one(struct mm_struct *mm, unsigned long addr)
 {
 	gfp_t gfp = GFP_PGTABLE_USER;
@@ -155,6 +203,24 @@ static inline pud_t *__pud_alloc_one(struct mm_struct *mm, unsigned long addr)
 		gfp = GFP_PGTABLE_KERNEL;
 	return (pud_t *)get_zeroed_page(gfp);
 }
+#else
+static inline pud_t *__pud_alloc_one(struct mm_struct *mm, unsigned long addr)
+{
+        pud_t *pud;
+        gfp_t gfp = __GFP_GENESIS;
+
+        if (mm != &init_mm)
+                gfp |= __GFP_ACCOUNT;
+        pud = (pud_t *)__get_free_page(gfp);
+        if (pud) {
+                _genesis_entry(/*svc_num*/ GENESIS_INIT_PUD,
+                               /*arg0*/ (unsigned long)pud,
+                               /*arg1*/ 0);
+        }
+
+        return pud;
+}
+#endif
 
 #ifndef __HAVE_ARCH_PUD_ALLOC_ONE
 /**
