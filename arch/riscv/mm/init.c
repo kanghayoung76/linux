@@ -36,11 +36,6 @@
 #include <asm/uaccess.h>
 
 #include "../kernel/head.h"
-extern int a =0;
-extern unsigned long a1=0;
-extern unsigned long a2=0;
-extern unsigned long a3=0;
-extern unsigned long a4=0;
 
 struct kernel_mapping kernel_map __ro_after_init;
 EXPORT_SYMBOL(kernel_map);
@@ -505,27 +500,13 @@ static void __init create_pmd_mapping(pmd_t *pmdp,
 
 	if (sz == PMD_SIZE) {
 		if (pmd_none(pmdp[pmd_idx]))
-#ifndef CONFIG_GENESIS
                         pmdp[pmd_idx] = pfn_pmd(PFN_DOWN(pa), prot);
-#else
-                        pmdp[pmd_idx] = pfn_pmd(PFN_DOWN(pa), prot);
-//                        _genesis_entry(/*svc_num*/ GENESIS_SET_PMD,
-//                                       /*arg0*/ (unsigned long)&pmdp[pmd_idx],
-//                                       /*arg1*/ (unsigned long)pmd_val(pfn_pmd(PFN_DOWN(pa), prot)));
-#endif
 		return;
 	}
 
 	if (pmd_none(pmdp[pmd_idx])) {
 		pte_phys = pt_ops.alloc_pte(va);
-#ifndef CONFIG_GENESIS
                 pmdp[pmd_idx] = pfn_pmd(PFN_DOWN(pte_phys), PAGE_TABLE);
-#else
-                pmdp[pmd_idx] = pfn_pmd(PFN_DOWN(pte_phys), PAGE_TABLE);
-//                _genesis_entry(/*svc_num*/ GENESIS_SET_PMD,
-//                               (unsigned long)&pmdp[pmd_idx],
-//                               (unsigned long)pmd_val(pfn_pmd(PFN_DOWN(pte_phys), PAGE_TABLE)));
-#endif
 		ptep = pt_ops.get_pte_virt(pte_phys);
 #ifndef CONFIG_GENESIS
 		memset(ptep, 0, PAGE_SIZE);
@@ -721,27 +702,13 @@ void __init create_pgd_mapping(pgd_t *pgdp,
 
 	if (sz == PGDIR_SIZE) {
 		if (pgd_val(pgdp[pgd_idx]) == 0)
-#ifndef CONFIG_GENESIS
                         pgdp[pgd_idx] = pfn_pgd(PFN_DOWN(pa), prot);
-#else
-                        pgdp[pgd_idx] = pfn_pgd(PFN_DOWN(pa), prot);
-//                        _genesis_entry(/*svc_num*/ GENESIS_SET_PGD,
-//                                       /*arg0*/ (unsigned long)&pgdp[pgd_idx],
-//                                       /*arg1*/ (unsigned long)pgd_val(pfn_pgd(PFN_DOWN(pa), prot)));
-#endif
 		return;
 	}
 
 	if (pgd_val(pgdp[pgd_idx]) == 0) {
 		next_phys = alloc_pgd_next(va);
-#ifndef CONFIG_GENESIS
                 pgdp[pgd_idx] = pfn_pgd(PFN_DOWN(next_phys), PAGE_TABLE);
-#else
-                pgdp[pgd_idx] = pfn_pgd(PFN_DOWN(next_phys), PAGE_TABLE);
-//                _genesis_entry(GENESIS_SET_PGD,
-//                               (unsigned long)&pgdp[pgd_idx],
-//                               (unsigned long)pgd_val(pfn_pgd(PFN_DOWN(next_phys), PAGE_TABLE)));
-#endif
 		nextp = get_pgd_next_virt(next_phys);
                 memset(nextp, 0, PAGE_SIZE);
 	} else {

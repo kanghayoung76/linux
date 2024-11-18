@@ -65,8 +65,6 @@ extern unsigned long shadow_offset_base;
 /***********************************************************/
 /* MISC (debug)                                            */
 /***********************************************************/
-extern int a;
-extern unsigned long  a1, a2, a3, a4;
 #define GENESIS_DEBUG 1
 
 #endif /* __ASSEMBLY__ */

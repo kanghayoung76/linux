@@ -1324,11 +1324,6 @@ static int __init debug_vm_pgtable(void)
 	int idx, ret;
 
 	pr_info("Validating architecture page table helpers\n");
-	pr_info("#set_pmd : %d\n",a);
-	pr_info("#1 origin addr : 0x%lx\n",a1);
-	pr_info("#2 origin addr : 0x%lx\n",a2);
-	pr_info("#3 origin addr : 0x%lx\n",a3);
-	pr_info("#4 origin addr : 0x%lx\n",a4);
 	ret = init_args(&args);
 	if (ret)
 		return ret;
