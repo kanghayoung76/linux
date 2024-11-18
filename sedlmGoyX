@@ -1,0 +1,385 @@
+#
+# Automatically generated file; DO NOT EDIT.
+# Linux/riscv 6.4.0 Kernel Configuration
+#
+
+#
+# General setup
+#
+
+#
+# IRQ subsystem
+#
+# end of IRQ subsystem
+
+
+#
+# Timers subsystem
+#
+# end of Timers subsystem
+
+
+#
+# BPF subsystem
+#
+# end of BPF subsystem
+
+
+#
+# CPU/Task time and stats accounting
+#
+# end of CPU/Task time and stats accounting
+
+
+#
+# RCU Subsystem
+#
+# end of RCU Subsystem
+
+
+#
+# Scheduler features
+#
+# end of Scheduler features
+
+
+#
+# Kernel Performance Events And Counters
+#
+# end of Kernel Performance Events And Counters
+
+# end of General setup
+
+
+#
+# SoC selection
+#
+# end of SoC selection
+
+#
+# CPU errata selection
+#
+# end of CPU errata selection
+
+#
+# Platform type
+#
+# end of Platform type
+
+#
+# Kernel features
+#
+# end of Kernel features
+
+#
+# Boot options
+#
+# end of Boot options
+
+
+#
+# Power management options
+#
+# end of Power management options
+
+#
+# CPU Power Management
+#
+
+#
+# CPU Idle
+#
+
+#
+# RISC-V CPU Idle Drivers
+#
+# end of RISC-V CPU Idle Drivers
+# end of CPU Idle
+
+#
+# CPU Frequency scaling
+#
+# end of CPU Frequency scaling
+# end of CPU Power Management
+
+
+#
+# General architecture-dependent options
+#
+
+#
+# GCOV-based kernel profiling
+#
+# end of GCOV-based kernel profiling
+
+# end of General architecture-dependent options
+
+
+#
+# Partition Types
+#
+# end of Partition Types
+
+
+#
+# IO Schedulers
+#
+# end of IO Schedulers
+
+
+#
+# Executable file formats
+#
+# end of Executable file formats
+
+#
+# Memory Management options
+#
+
+#
+# SLAB allocator options
+#
+# end of SLAB allocator options
+
+
+#
+# Data Access Monitoring
+#
+# end of Data Access Monitoring
+# end of Memory Management options
+
+
+#
+# Networking options
+#
+
+#
+# Core Netfilter Configuration
+#
+
+#
+# Xtables combined modules
+#
+
+#
+# Xtables targets
+#
+
+#
+# Xtables matches
+#
+# end of Core Netfilter Configuration
+
+
+#
+# IPVS transport protocol load balancing support
+#
+
+#
+# IPVS scheduler
+#
+
+#
+# IPVS SH scheduler
+#
+
+#
+# IPVS MH scheduler
+#
+
+#
+# IPVS application helper
+#
+
+#
+# IP: Netfilter Configuration
+#
+# end of IP: Netfilter Configuration
+
+#
+# IPv6: Netfilter Configuration
+#
+# end of IPv6: Netfilter Configuration
+
+
+#
+# Queueing/Scheduling
+#
+
+#
+# Classification
+#
+
+#
+# Network testing
+#
+# end of Network testing
+# end of Networking options
+
+
+#
+# CFG80211 needs to be enabled for MAC80211
+#
+
+#
+# Device Drivers
+#
+
+#
+# PCI controller drivers
+#
+
+#
+# Cadence-based PCIe controllers
+#
+# end of Cadence-based PCIe controllers
+
+#
+# DesignWare-based PCIe controllers
+#
+# end of DesignWare-based PCIe controllers
+
+#
+# Mobiveil-based PCIe controllers
+#
+# end of Mobiveil-based PCIe controllers
+# end of PCI controller drivers
+
+#
+# PCI Endpoint
+#
+# end of PCI Endpoint
+
+#
+# PCI switch controller drivers
+#
+# end of PCI switch controller drivers
+
+
+#
+# Generic Driver Options
+#
+
+#
+# Firmware loader
+#
+# end of Firmware loader
+
+# end of Generic Driver Options
+
+#
+# Bus devices
+#
+# end of Bus devices
+
+
+#
+# Firmware Drivers
+#
+
+#
+# ARM System Control and Management Interface Protocol
+#
+# end of ARM System Control and Management Interface Protocol
+
+
+#
+# EFI (Extensible Firmware Interface) Support
+#
+# end of EFI (Extensible Firmware Interface) Support
+
+#
+# Tegra firmware driver
+#
+# end of Tegra firmware driver
+# end of Firmware Drivers
+
+
+#
+# NVME Support
+#
+# end of NVME Support
+
+#
+# Misc devices
+#
+
+#
+# EEPROM support
+#
+# end of EEPROM support
+
+
+#
+# Texas Instruments shared transport line discipline
+#
+# end of Texas Instruments shared transport line discipline
+
+
+#
+# Altera FPGA firmware download module (requires I2C)
+#
+# end of Misc devices
+
+#
+# SCSI device support
+#
+
+#
+# SCSI support type (disk, tape, CD-ROM)
+#
+
+#
+# SCSI Transports
+#
+# end of SCSI Transports
+
+# end of SCSI device support
+
+
+#
+# Controllers with non-SFF native interface
+#
+
+#
+# SFF controllers with custom DMA interface
+#
+
+#
+# SATA SFF controllers with BMDMA
+#
+
+#
+# PATA SFF controllers with BMDMA
+#
+
+#
+# PIO-only SFF controllers
+#
+
+#
+# Generic fallback / legacy drivers
+#
+
+#
+# IEEE 1394 (FireWire) support
+#
+# end of IEEE 1394 (FireWire) support
+
+
+#
+# MII PHY device drivers
+#
+
+#
+# MDIO Multiplexers
+#
+
+#
+# PCS device drivers
+#
+# end of PCS device drivers
+
+
+#
+# Wir

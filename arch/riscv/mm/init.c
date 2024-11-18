@@ -36,6 +36,11 @@
 #include <asm/uaccess.h>
 
 #include "../kernel/head.h"
+extern int a =0;
+extern unsigned long a1=0;
+extern unsigned long a2=0;
+extern unsigned long a3=0;
+extern unsigned long a4=0;
 
 struct kernel_mapping kernel_map __ro_after_init;
 EXPORT_SYMBOL(kernel_map);
@@ -500,15 +505,36 @@ static void __init create_pmd_mapping(pmd_t *pmdp,
 
 	if (sz == PMD_SIZE) {
 		if (pmd_none(pmdp[pmd_idx]))
-			pmdp[pmd_idx] = pfn_pmd(PFN_DOWN(pa), prot);
+#ifndef CONFIG_GENESIS
+                        pmdp[pmd_idx] = pfn_pmd(PFN_DOWN(pa), prot);
+#else
+                        pmdp[pmd_idx] = pfn_pmd(PFN_DOWN(pa), prot);
+//                        _genesis_entry(/*svc_num*/ GENESIS_SET_PMD,
+//                                       /*arg0*/ (unsigned long)&pmdp[pmd_idx],
+//                                       /*arg1*/ (unsigned long)pmd_val(pfn_pmd(PFN_DOWN(pa), prot)));
+#endif
 		return;
 	}
 
 	if (pmd_none(pmdp[pmd_idx])) {
 		pte_phys = pt_ops.alloc_pte(va);
-		pmdp[pmd_idx] = pfn_pmd(PFN_DOWN(pte_phys), PAGE_TABLE);
+#ifndef CONFIG_GENESIS
+                pmdp[pmd_idx] = pfn_pmd(PFN_DOWN(pte_phys), PAGE_TABLE);
+#else
+                pmdp[pmd_idx] = pfn_pmd(PFN_DOWN(pte_phys), PAGE_TABLE);
+//                _genesis_entry(/*svc_num*/ GENESIS_SET_PMD,
+//                               (unsigned long)&pmdp[pmd_idx],
+//                               (unsigned long)pmd_val(pfn_pmd(PFN_DOWN(pte_phys), PAGE_TABLE)));
+#endif
 		ptep = pt_ops.get_pte_virt(pte_phys);
+#ifndef CONFIG_GENESIS
 		memset(ptep, 0, PAGE_SIZE);
+#else
+               _genesis_entry(/*svc_num*/ GENESIS_INIT_PTE,
+                              /*arg0*/ (unsigned long)ptep,
+                              /*arg1*/ 0);
+#endif
+
 	} else {
 		pte_phys = PFN_PHYS(_pmd_pfn(pmdp[pmd_idx]));
 		ptep = pt_ops.get_pte_virt(pte_phys);
@@ -611,7 +637,14 @@ static void __init create_pud_mapping(pud_t *pudp,
 		next_phys = pt_ops.alloc_pmd(va);
 		pudp[pud_index] = pfn_pud(PFN_DOWN(next_phys), PAGE_TABLE);
 		nextp = pt_ops.get_pmd_virt(next_phys);
+#ifndef CONFIG_GENESIS
 		memset(nextp, 0, PAGE_SIZE);
+#else
+                _genesis_entry(/*svc_num*/ GENESIS_INIT_PMD,
+                               /*arg0*/ (unsigned long)nextp,
+                               /*arg1*/ 0);
+#endif
+
 	} else {
 		next_phys = PFN_PHYS(_pud_pfn(pudp[pud_index]));
 		nextp = pt_ops.get_pmd_virt(next_phys);
@@ -710,14 +743,7 @@ void __init create_pgd_mapping(pgd_t *pgdp,
 //                               (unsigned long)pgd_val(pfn_pgd(PFN_DOWN(next_phys), PAGE_TABLE)));
 #endif
 		nextp = get_pgd_next_virt(next_phys);
-#ifndef CONFIG_GENESIS
                 memset(nextp, 0, PAGE_SIZE);
-#else
-                memset(nextp, 0, PAGE_SIZE);
-//                _genesis_entry(/*svc_num*/ GENESIS_INIT_P4D,
-//                               /*arg0*/ (unsigned long)nextp,
-//                               /*arg1*/ 0);
-#endif
 	} else {
 		next_phys = PFN_PHYS(_pgd_pfn(pgdp[pgd_idx]));
 		nextp = get_pgd_next_virt(next_phys);
