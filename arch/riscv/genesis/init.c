@@ -30,16 +30,17 @@ extern char __genesis_text_begin[], __genesis_text_end[];
 
 void __init genesis_test(void)
 {
-	void *p, *p2;
+	void *p1, *p2;
 	int *p3, *shadow_p3;
+	int *sfk, *shadow_p;
 
 	pr_info("[GENESIS] TEST CODE START\n");
 	pr_info("[GENESIS] TEST 1. GFP_GENESIS ");
-	p = (void *)__get_free_page(GFP_KERNEL);
-	pr_info("p1 va: 0x%px pa: 0x%lx (GFP_KERNEL)\n", p, __pa(p));
+	p1 = (void *)__get_free_page(GFP_KERNEL);
+	pr_info("p1 va: 0x%px pa: 0x%lx (GFP_KERNEL)\n", p1, __pa(p1));
 	p2 = (void *)__get_free_page(GFP_KERNEL);
 	pr_info("p2 va: 0x%px pa: 0x%lx (GFP_KERNEL)\n", p2, __pa(p2));
-	free_page((unsigned long int)p);
+	free_page((unsigned long int)p1);
 	free_page((unsigned long int)p2);
 
 	p3 = (int *)__get_free_page(__GFP_GENESIS);
@@ -49,17 +50,21 @@ void __init genesis_test(void)
 	pr_info("addr: %px, shadow_addr: %lx\n", p3, __virt_to_shadow(p3));
 	*p3 = 1234; // okay
 	shadow_p3 = (int *)__virt_to_shadow(p3);
-        unsigned long sstatus;
-        __asm__ __volatile__ ("csrr %0, sstatus" : "=r" (sstatus));
-        pr_info("sstatus : 0x%px\n",sstatus);
 	__enable_user_access();
-        __asm__ __volatile__ ("csrr %0, sstatus" : "=r" (sstatus));
-        pr_info("sstatus : 0x%px\n",sstatus);
 	pr_info("addr val: %d, shadow val: %d\n", *p3, *shadow_p3);
 	*shadow_p3 = 12345;
 	pr_info("addr val: %d, shadow val: %d\n", *p3, *shadow_p3);
 	__disable_user_access();
 	free_page((unsigned long int)p3);
+
+	pr_info("[SFK] TEST 3. GFP_SFK ");
+	sfk = (int *)__get_free_page(__GFP_SFK);
+	if (!sfk) {
+	    pr_err("Failed to allocate memory in ZONE_SFK\n");
+	}
+	pr_info("sfk va: 0x%px pa: 0x%lx (GFP_SFK)\n", sfk, __pa(sfk));
+	free_page((unsigned long int)sfk);
+
 
 	pr_info("[GENESIS] TEST CODE END\n");
 }

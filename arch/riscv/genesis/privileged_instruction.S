@@ -11,6 +11,11 @@ ENTRY(_genesis_write_satp)
 	ret
 ENDPROC(_genesis_write_satp)
 
+ENTRY(_sfk_write_hgatp)
+        csrw CSR_HGATP, a0
+        ret
+ENDPROC(_sfk_write_hgatp)
+
 // FIXME: MSB (63rd bit) is set after executing csrw and csrs
 ENTRY(_genesis_write_csr)
 	csrw CSR_STATUS, a0
