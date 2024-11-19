@@ -780,6 +780,7 @@ enum zone_type {
 	 */
 	ZONE_MOVABLE,
 #ifdef CONFIG_GENESIS
+	ZONE_SFK,
 	ZONE_GENESIS,
 #endif
 #ifdef CONFIG_ZONE_DEVICE

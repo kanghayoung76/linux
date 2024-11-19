@@ -9,10 +9,13 @@
 
 #ifdef CONFIG_GENESIS
 #define ___GFP_GENESIS          0x10000000u
+#define ___GFP_SFK          	0x20000000u
 #else
 #define ___GFP_GENESIS          0
+#define ___GFP_SFK          	0
 #endif
 #define __GFP_GENESIS   ((__force gfp_t)___GFP_GENESIS)
+#define __GFP_SFK   ((__force gfp_t)___GFP_SFK)
 
 #define __GFP_BITS_SHIFT (28 + IS_ENABLED(CONFIG_GENESIS))
 
@@ -145,6 +148,7 @@ static inline enum zone_type gfp_zone(gfp_t flags)
 
 #ifdef CONFIG_GENESIS
 	if (flags & __GFP_GENESIS) return ZONE_GENESIS;
+	if (flags & __GFP_SFK) return ZONE_SFK;
 #endif
 
 	z = (GFP_ZONE_TABLE >> (bit * GFP_ZONES_SHIFT)) &
