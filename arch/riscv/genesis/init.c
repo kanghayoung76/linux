@@ -1,6 +1,7 @@
 #include <linux/init.h>
 #include <linux/gfp.h>
 #include <linux/memblock.h>
+#include <asm/io.h>
 
 #include <asm/genesis.h>
 #include <asm/vmlinux.lds.h>
@@ -27,6 +28,22 @@ extern char __genesis_text_begin[], __genesis_text_end[];
 
 #undef pr_fmt
 #define pr_fmt(fmt) "[GENESIS] " fmt
+
+static void __init sfk_mapping(void){
+
+	pgd_t *pgd;
+
+    	pr_info("#### create guest pgd ####\n");
+    	pgd = (pgd_t *)__get_free_page(__GFP_GENESIS);
+    	pr_info("### pgd(vir) : 0x%lx\n", pgd);
+    	pr_info("### pgd(phy) : 0x%lx\n", virt_to_phys(pgd));
+
+	pr_info("#### update HGATP ####\n");
+	unsigned long hgatp = (HGATP_MODE_SV39X4 << HGATP_MODE_SHIFT);
+	hgatp |= (virt_to_phys(pgd) >> PAGE_SHIFT) & GENMASK(43,0);
+	csr_write(CSR_HGATP, hgatp);
+    	pr_info("hgatp : 0x%lx\n",csr_read(CSR_HGATP));
+}
 
 void __init genesis_test(void)
 {
@@ -112,5 +129,6 @@ void __init genesis_init(void)
 
 	genesis_enabled = 1;
 
+	sfk_mapping();
 	genesis_zone_set_readonly();
 }
