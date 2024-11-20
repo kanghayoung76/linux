@@ -9,7 +9,7 @@
 
 #ifdef CONFIG_GENESIS
 #define ___GFP_GENESIS          0x10000000u
-#define ___GFP_SFK          	0x40000000u
+#define ___GFP_SFK          	0x20000000u
 #else
 #define ___GFP_GENESIS          0
 #define ___GFP_SFK          	0
