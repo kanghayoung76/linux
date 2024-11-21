@@ -49,7 +49,6 @@ void __init genesis_test(void)
 {
 	void *p1, *p2;
 	int *p3, *shadow_p3;
-	int *sfk, *shadow_sfk;
 
 	pr_info("[GENESIS] TEST CODE START\n");
 	pr_info("[GENESIS] TEST 1. GFP_GENESIS ");
@@ -73,23 +72,6 @@ void __init genesis_test(void)
 	pr_info("addr val: %d, shadow val: %d\n", *p3, *shadow_p3);
 	__disable_user_access();
 	free_page((unsigned long int)p3);
-
-	pr_info("[SFK] TEST 3. GFP_SFK ");
-	sfk = (int *)__get_free_page(__GFP_SFK);
-	memset(sfk,0,PMD_SIZE);
-	pr_info("sfk va: 0x%px pa: 0x%lx (GFP_SFK)\n", sfk, __pa(sfk));
-
-        pr_info("[SFK] TEST 4. SHADOW MAPPING ");
-        pr_info("addr: %px, shadow_addr: %lx\n", sfk, __virt_to_shadow(sfk));
-        *sfk = 1234; // okay
-        shadow_sfk = (int *)__virt_to_shadow(sfk);
-        __enable_user_access();
-        pr_info("addr val: %d, shadow val: %d\n", *sfk, *shadow_sfk);
-        *shadow_sfk = 12345;
-        pr_info("addr val: %d, shadow val: %d\n", *sfk, *shadow_sfk);
-        __disable_user_access();
-        free_page((unsigned long int)sfk);
-
 
 	pr_info("[GENESIS] TEST CODE END\n");
 }
@@ -129,6 +111,6 @@ void __init genesis_init(void)
 
 	genesis_enabled = 1;
 
-	sfk_mapping();
+//	sfk_mapping();
 	genesis_zone_set_readonly();
 }
