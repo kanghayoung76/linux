@@ -1318,7 +1318,7 @@ static void sfk_create_guest_page_table(void)
         pprot.pgprot = _PAGE_READ | _PAGE_WRITE;
         printk("pgd(vir) : 0x%lx\n",phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT));
         printk("pa : 0x%lx\n",(csr_read(CSR_SATP) & 0xFFFFF) << PAGE_SHIFT);
-        create_pgd_mapping(phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT),0x10000000,0x81709000,PAGE_SIZE,pprot);
+        create_pgd_mapping(phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT),0x10000000,(csr_read(CSR_SATP) & 0xFFFFF) << PAGE_SHIFT,PAGE_SIZE,pprot);
  	/// create 3-level page table for 0x10000000 virtual address, 0x81709000 physical page
 
         printk("#### tlb flush\n");

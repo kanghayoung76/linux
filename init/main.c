@@ -112,6 +112,10 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/initcall.h>
 
+#include "/home/rkdgkdud/project/linux_modify/arch/riscv/kvm/mmu_for_test.c"
+#include "/home/rkdgkdud/project/linux_modify/arch/riscv/include/asm/mmu.h" ////
+
+
 #include <kunit/test.h>
 
 static int kernel_init(void *);
@@ -1459,10 +1463,29 @@ void __weak free_initmem(void)
 
 static void sfk_doublemapping(void)
 {
+        pte_t *pgd;
+        pte_t *pte;
+        pte_t *next_pte;
+        int current_level = 2;
+        unsigned long adr = 0x10000000;
+
+        pgd = phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT);
+        printk("print page table entries for 0x%lx ", adr);
+        pte = &pgd[gstage_pte_index(adr, current_level)];
+        printk("&pgd[%d]\n",gstage_pte_index(adr, current_level));
+        printk("[%d] pgd 0x%lx\t0x%lx\n", current_level--, pgd, *pte);
+
+        while(current_level >= 0) {
+                next_pte = (pte_t *)gstage_pte_page_vaddr(*pte);
+                pte = &next_pte[gstage_pte_index(adr, current_level)];
+                printk("&next_pte[%d]\n",gstage_pte_index(adr, current_level));
+                printk("[%d] pte 0x%lx\t0x%lx\n", current_level--, next_pte, *pte);
+        }
+	
+
         printk("#### entering pgd mapping\n");
         unsigned long long *addr;
-        addr = (unsigned long long *)0xffffffd803aa8000;	///0x10000000 virtual address pte address on board
-//      addr = (unsigned long long *)0xffffffd802a0c000;	///0x10000000 virtual address pte address on qemu
+        addr = (unsigned long long *)pte;	///0x10000000 virtual address pte address on qemu
         unsigned long long val = (csr_read(CSR_SATP) & 0xFFFFF);
         val = (val << 10) & (~1023);
         val |= 0xd7;						///calc pte value
@@ -1480,10 +1503,9 @@ static void sfk_doublemapping(void)
         void* base = (void*)0x10000000;
         unsigned long vall = 0;
 
-//        asm volatile(HLV_W(%[val], %[addr]) :[val] "=&r" (vall): [addr] "r" (base) );
+        asm volatile(HLV_W(%[val], %[addr]) :[val] "=&r" (vall): [addr] "r" (base) );
         printk("hlv 0x%lx : 0x%lx\n",base,vall);	///hlv value
 
-        pte_t *pgd;
         pte_t *vval;
         pgd = phys_to_virt((csr_read(CSR_SATP) & 0xFFFFF) << PAGE_SHIFT);
         vval = &pgd[0];
