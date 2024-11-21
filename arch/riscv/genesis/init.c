@@ -8,6 +8,8 @@
 #include <asm/page.h>
 #include <asm/set_memory.h>
 
+#define _PAGE_VALID   _AC(0x1,UL)
+
 int genesis_enabled __ro_after_init = 0;
 
 /* FIXME: Use a unused hole
@@ -27,22 +29,65 @@ extern char __privinst_begin[], __privinst_end[];
 extern char __genesis_text_begin[], __genesis_text_end[];
 
 #undef pr_fmt
-#define pr_fmt(fmt) "[GENESIS] " fmt
+#define pr_fmt(fmt) "[] " fmt
+
+#define gstage_pgd_size    (1UL << (HGATP_PAGE_SHIFT + 2))      ////
 
 static void __init sfk_mapping(void){
 
-	pgd_t *pgd;
+        printk("[SFK] #### create guest pgd ####\n");
 
-    	pr_info("#### create guest pgd ####\n");
-    	pgd = (pgd_t *)__get_free_page(__GFP_GENESIS);
-    	pr_info("### pgd(vir) : 0x%lx\n", pgd);
-    	pr_info("### pgd(phy) : 0x%lx\n", virt_to_phys(pgd));
+        struct page *pgd_page;
 
-	pr_info("#### update HGATP ####\n");
-	unsigned long hgatp = (HGATP_MODE_SV39X4 << HGATP_MODE_SHIFT);
-	hgatp |= (virt_to_phys(pgd) >> PAGE_SHIFT) & GENMASK(43,0);
-	csr_write(CSR_HGATP, hgatp);
-    	pr_info("hgatp : 0x%lx\n",csr_read(CSR_HGATP));
+        pgd_page = (struct page *)alloc_pages(__GFP_GENESIS | __GFP_ZERO, get_order(gstage_pgd_size));  /// create pgd
+        printk("[SFK] pgd(vir) : 0x%lx\n", page_to_virt(pgd_page));
+        printk("[SFK] pgd(phy) : 0x%lx\n", page_to_phys(pgd_page));
+
+        printk("[SFK] #### update HGATP ####\n");
+        unsigned long hgatp = (HGATP_MODE_SV39X4 << HGATP_MODE_SHIFT);
+        hgatp |= (page_to_phys(pgd_page) >> PAGE_SHIFT) & GENMASK(43,0);
+        csr_write(CSR_HGATP, hgatp);                            /// hgatp update pointing pgd
+        printk("[SFK] hgatp : 0x%lx\n",csr_read(CSR_HGATP));
+
+        printk("[SFK] #### guest PT mapping ####\n");
+        pgprot_t pprot;
+        pprot.pgprot = _PAGE_READ | _PAGE_WRITE | _PAGE_VALID | _PAGE_USER | _PAGE_ACCESSED | _PAGE_DIRTY;
+        create_pgd_mapping(phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT),0x10000000,0xbfe00000,PAGE_SIZE,pprot);
+        /// create 3-level page table for 0x10000000 virtual address, 0x81709000 physical page
+
+        printk("[SFK] #### tlb flush ####\n");
+        asm volatile("sfence.vma" ::: "memory");
+	
+//	int *sfk;
+//	sfk = (int *)__get_free_page(__GFP_SFK);
+//	*sfk = 111;
+}
+
+void __init sfk_test(void)
+{
+
+	int *sfk, *shadow_sfk;
+
+        pr_info("[SFK] TEST 3. GFP_SFK ");
+        sfk = (int *)__get_free_page(__GFP_SFK);
+        memset(sfk,0,PMD_SIZE);
+        pr_info("[SFK] sfk va: 0x%px pa: 0x%lx (GFP_SFK)\n", sfk, __pa(sfk));
+	*sfk = 111;	
+
+        pr_info("[SFK] TEST 4. SHADOW MAPPING ");
+        pr_info("[SFK] 1. kernel HVA : 0x%px value : %d\n", sfk, *sfk);
+	
+        shadow_sfk = (int *)__virt_to_shadow(sfk);
+        __enable_user_access();
+        pr_info("[SFK] 2. GENESIS user HVA : 0x%px value : %d\n", shadow_sfk, *shadow_sfk);
+        __disable_user_access();
+
+        void* base = (void*)0x10000000;
+        unsigned long vall = 0;
+        asm volatile(HLV_W(%[val], %[addr]) :[val] "=&r" (vall): [addr] "r" (base) );
+        pr_info("[SFK] 3. SFK vm GPA : 0x%px value : %d\n", sfk, vall);
+	
+        free_page((unsigned long int)sfk);
 }
 
 void __init genesis_test(void)
@@ -111,6 +156,7 @@ void __init genesis_init(void)
 
 	genesis_enabled = 1;
 
-//	sfk_mapping();
+	sfk_mapping();
+	sfk_test();
 	genesis_zone_set_readonly();
 }
