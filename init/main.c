@@ -111,8 +111,6 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/initcall.h>
 
-#include "/home/rkdgkdud/project/linux_modify/arch/riscv/kvm/mmu_for_test.c"
-#include "/home/rkdgkdud/project/linux_modify/arch/riscv/include/asm/mmu.h" ////
 
 #include <kunit/test.h>
 

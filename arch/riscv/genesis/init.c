@@ -46,21 +46,21 @@ static void __init sfk_mapping(void){
         printk("[SFK] #### update HGATP ####\n");
         unsigned long hgatp = (HGATP_MODE_SV39X4 << HGATP_MODE_SHIFT);
         hgatp |= (page_to_phys(pgd_page) >> PAGE_SHIFT) & GENMASK(43,0);
-        csr_write(CSR_HGATP, hgatp);                            /// hgatp update pointing pgd
+	_genesis_entry(/*svc_num*/ SFK_WRITE_HGATP,
+			/*arg0*/ hgatp,
+			/*arg1*/ 0);
+//        csr_write(CSR_HGATP, hgatp);                            /// hgatp update pointing pgd
         printk("[SFK] hgatp : 0x%lx\n",csr_read(CSR_HGATP));
 
         printk("[SFK] #### guest PT mapping ####\n");
         pgprot_t pprot;
         pprot.pgprot = _PAGE_READ | _PAGE_WRITE | _PAGE_VALID | _PAGE_USER | _PAGE_ACCESSED | _PAGE_DIRTY;
-        create_pgd_mapping(phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT),0x10000000,0xbfe00000,PAGE_SIZE,pprot);
-        /// create 3-level page table for 0x10000000 virtual address, 0x81709000 physical page
+        create_pgd_mapping(phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT),0x10000000,0xbfe00000,PMD_SIZE,pprot);
+        /// create 3-level page table for pgd, virtual address, physical address, size, prot 
 
         printk("[SFK] #### tlb flush ####\n");
         asm volatile("sfence.vma" ::: "memory");
 	
-//	int *sfk;
-//	sfk = (int *)__get_free_page(__GFP_SFK);
-//	*sfk = 111;
 }
 
 void __init sfk_test(void)
