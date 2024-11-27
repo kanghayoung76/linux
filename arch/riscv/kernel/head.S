@@ -112,7 +112,8 @@ relocate_enable_mmu:
 	/* Reload the global pointer */
 .option push
 .option norelax
-	la gp, __global_pointer$
+//	la gp, __global_pointer$
+	li gp, 0xffffffd850000000
 .option pop
 
 	/*
@@ -136,7 +137,8 @@ secondary_start_sbi:
 	/* Load the global pointer */
 	.option push
 	.option norelax
-		la gp, __global_pointer$
+		//la gp, __global_pointer$
+		li gp, 0xffffffd850000000
 	.option pop
 
 	/*
@@ -230,7 +232,8 @@ pmp_done:
 	/* Load the global pointer */
 .option push
 .option norelax
-	la gp, __global_pointer$
+	//la gp, __global_pointer$
+	li gp, 0xffffffd850000000
 .option pop
 
 	/*

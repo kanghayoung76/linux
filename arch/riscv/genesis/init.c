@@ -29,7 +29,7 @@ extern char __privinst_begin[], __privinst_end[];
 extern char __genesis_text_begin[], __genesis_text_end[];
 
 #undef pr_fmt
-#define pr_fmt(fmt) "[] " fmt
+#define pr_fmt(fmt) "[GESIS] " fmt
 
 #define gstage_pgd_size    (1UL << (HGATP_PAGE_SHIFT + 2))      ////
 
@@ -55,8 +55,19 @@ static void __init sfk_mapping(void){
         printk("[SFK] #### guest PT mapping ####\n");
         pgprot_t pprot;
         pprot.pgprot = _PAGE_READ | _PAGE_WRITE | _PAGE_VALID | _PAGE_USER | _PAGE_ACCESSED | _PAGE_DIRTY;
-        create_pgd_mapping(phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT),0x10000000,0xbfe00000,PMD_SIZE,pprot);
+        create_pgd_mapping(phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT),0x83fe00000,0xbfe00000,PMD_SIZE,pprot);
         /// create 3-level page table for pgd, virtual address, physical address, size, prot 
+    	uint64_t ggp;
+    	asm volatile(
+        	"mv %0, gp       \n"
+        	: "=r" (ggp)
+    	);
+    	printk("[GP_TEST] gp2: 0x%llx\n", ggp);
+
+        int *gp = (int *)0xffffffd850000000;
+        printk("[GP_TEST] gp2(0xffffffd850000000) : 0x%px\n",*gp);
+        gp = (int *)0xffffffd850000008;
+        printk("[GP_TEST] gp2(0xffffffd850000008) : 0x%px\n",*gp);
 
         printk("[SFK] #### tlb flush ####\n");
         asm volatile("sfence.vma" ::: "memory");
@@ -82,10 +93,22 @@ void __init sfk_test(void)
         pr_info("[SFK] 2. GENESIS user HVA : 0x%px value : %d\n", shadow_sfk, *shadow_sfk);
         __disable_user_access();
 
-        void* base = (void*)0x10000000;
+        void* base = (void*)0x83fe00000;
         unsigned long vall = 0;
         asm volatile(HLV_W(%[val], %[addr]) :[val] "=&r" (vall): [addr] "r" (base) );
         pr_info("[SFK] 3. SFK vm GPA : 0x%px value : %d\n", sfk, vall);
+
+        uint64_t ggp;
+        asm volatile(
+                "mv %0, gp       \n"
+                : "=r" (ggp)
+        );
+        printk("[GP_TEST] gp3: 0x%llx\n", ggp);
+	
+	int *gp = (int *)0xffffffd850000000;
+	printk("[GP_TEST] gp3(0xffffffd850000000) : 0x%px\n",*gp);
+        gp = (int *)0xffffffd850000008;
+        printk("[GP_TEST] gp3(0xffffffd850000008) : 0x%px\n",*gp);
 	
         free_page((unsigned long int)sfk);
 }
@@ -118,6 +141,19 @@ void __init genesis_test(void)
 	__disable_user_access();
 	free_page((unsigned long int)p3);
 
+        uint64_t ggp;
+        asm volatile(
+                "mv %0, gp       \n"
+                : "=r" (ggp)
+        );
+        printk("[GP_TEST] gp1: 0x%llx\n", ggp);
+
+        int *gp = (int *)0xffffffd850000000;
+        printk("[GP_TEST] gp1(0xffffffd850000000) : 0x%px\n",*gp);
+        gp = (int *)0xffffffd850000008;
+        printk("[GP_TEST] gp1(0xffffffd850000008) : 0x%px\n",*gp);
+
+
 	pr_info("[GENESIS] TEST CODE END\n");
 }
 
@@ -138,12 +174,37 @@ void __init genesis_zone_set_readonly(void)
 	ret = set_memory_rw(base, numpages);
 	if (ret)
 		panic("[GENESIS] failed to mark readonly!");
+
+        uint64_t ggp;
+        asm volatile(
+                "mv %0, gp       \n"
+                : "=r" (ggp)
+        );
+        printk("[GP_TEST] gp4: 0x%llx\n", ggp);
+
+        int *gp = (int *)0xffffffd850000000;
+        printk("[GP_TEST] gp4(0xffffffd850000000) : 0x%px\n",*gp);
+        gp = (int *)0xffffffd850000008;
+        printk("[GP_TEST] gp4(0xffffffd850000008) : 0x%px\n",*gp);
+
 }
 
 void __init genesis_init(void)
 {
 	pr_info("TEXT BEGIN: %px, END: %px\n", __genesis_text_begin,
 					       __genesis_text_end);
+
+        uint64_t ggp;
+        asm volatile(
+                "mv %0, gp       \n"
+                : "=r" (ggp)
+        );
+        printk("[GP_TEST] gp0: 0x%llx\n", ggp);
+
+        int *gp = (int *)0xffffffd850000000;
+        printk("[GP_TEST] gp0(0xffffffd850000000) : 0x%px\n",*gp);
+        gp = (int *)0xffffffd850000008;
+        printk("[GP_TEST] gp0(0xffffffd850000008) : 0x%px\n",*gp);
 
 #if (GENESIS_DEBUG)
 	genesis_test();
