@@ -61,7 +61,7 @@ else ifeq ($(CONFIG_LTO_CLANG),y)
 endif
 
 ifeq ($(CONFIG_SHADOW_CALL_STACK),y)
-	KBUILD_LDFLAGS += --no-relax-gp
+	KBUILD_LDFLAGS += --no-relax
 endif
 
 # ISA string setting
