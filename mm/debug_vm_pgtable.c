@@ -1296,6 +1296,13 @@ error:
 
 static int __init debug_vm_pgtable(void)
 {
+	uint64_t gp;
+    	asm volatile(
+            	"mv %0, x3       \n"
+            	: "=r" (gp)
+    	);
+    	printk("gp: 0x%llx\n", gp);
+
 	struct pgtable_debug_args args;
 	spinlock_t *ptl = NULL;
 	int idx, ret;

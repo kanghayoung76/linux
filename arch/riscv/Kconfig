@@ -214,7 +214,7 @@ config GCC_SUPPORTS_DYNAMIC_FTRACE
 config HAVE_SHADOW_CALL_STACK
 	def_bool $(cc-option,-fsanitize=shadow-call-stack)
 	# https://github.com/riscv-non-isa/riscv-elf-psabi-doc/commit/a484e843e6eeb51f0cb7b8819e50da6d2444d769
-	depends on $(ld-option,--no-relax-gp)
+	depends on $(ld-option,--no-relax)
 
 config RISCV_USE_LINKER_RELAXATION
 	def_bool y
