@@ -334,7 +334,7 @@ static inline void might_alloc(gfp_t gfp_mask)
 	fs_reclaim_acquire(gfp_mask);
 	fs_reclaim_release(gfp_mask);
 
-	might_sleep_if(gfpflags_allow_blocking(gfp_mask));
+	//might_sleep_if(gfpflags_allow_blocking(gfp_mask));
 }
 
 /**

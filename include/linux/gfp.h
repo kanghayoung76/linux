@@ -32,30 +32,30 @@ struct mempolicy;
  */
 
 /* Plain integer GFP bitmasks. Do not use this directly. */
-//#define ___GFP_DMA              0x01u
-//#define ___GFP_HIGHMEM          0x02u
-//#define ___GFP_DMA32            0x04u
-//#define ___GFP_MOVABLE          0x08u
-//#define ___GFP_RECLAIMABLE      0x10u
-//#define ___GFP_HIGH             0x20u
-//#define ___GFP_IO               0x40u
-//#define ___GFP_FS               0x80u
-//#define ___GFP_ZERO             0x100u
+#define ___GFP_DMA              0x01u
+#define ___GFP_HIGHMEM          0x02u
+#define ___GFP_DMA32            0x04u
+#define ___GFP_MOVABLE          0x08u
+#define ___GFP_RECLAIMABLE      0x10u
+#define ___GFP_HIGH             0x20u
+#define ___GFP_IO               0x40u
+#define ___GFP_FS               0x80u
+#define ___GFP_ZERO             0x100u
 #define ___GFP_ATOMIC           0x200u
-//#define ___GFP_DIRECT_RECLAIM   0x400u
-//#define ___GFP_KSWAPD_RECLAIM   0x800u
-//#define ___GFP_WRITE            0x1000u
-//#define ___GFP_NOWARN           0x2000u
-//#define ___GFP_RETRY_MAYFAIL    0x4000u
-//#define ___GFP_NOFAIL           0x8000u
-//#define ___GFP_NORETRY          0x10000u
-//#define ___GFP_MEMALLOC         0x20000u
-//#define ___GFP_COMP             0x40000u
-//#define ___GFP_NOMEMALLOC       0x80000u
-//#define ___GFP_HARDWALL         0x100000u
-//#define ___GFP_THISNODE         0x200000u
-//#define ___GFP_ACCOUNT          0x400000u
-//#define ___GFP_ZEROTAGS         0x800000u
+#define ___GFP_DIRECT_RECLAIM   0x400u
+#define ___GFP_KSWAPD_RECLAIM   0x800u
+#define ___GFP_WRITE            0x1000u
+#define ___GFP_NOWARN           0x2000u
+#define ___GFP_RETRY_MAYFAIL    0x4000u
+#define ___GFP_NOFAIL           0x8000u
+#define ___GFP_NORETRY          0x10000u
+#define ___GFP_MEMALLOC         0x20000u
+#define ___GFP_COMP             0x40000u
+#define ___GFP_NOMEMALLOC       0x80000u
+#define ___GFP_HARDWALL         0x100000u
+#define ___GFP_THISNODE         0x200000u
+#define ___GFP_ACCOUNT          0x400000u
+#define ___GFP_ZEROTAGS         0x800000u
 #ifdef CONFIG_KASAN_HW_TAGS
 #define ___GFP_SKIP_ZERO                0x1000000u
 #define ___GFP_SKIP_KASAN_UNPOISON      0x2000000u
@@ -273,7 +273,7 @@ struct mempolicy;
 #define __GFP_NOLOCKDEP ((__force gfp_t)___GFP_NOLOCKDEP)
 
 /* Room for N __GFP_FOO bits */
-//#define __GFP_BITS_SHIFT (28 + IS_ENABLED(CONFIG_GENESIS))
+#define __GFP_BITS_SHIFT (28 + IS_ENABLED(CONFIG_GENESIS))
 #define __GFP_BITS_MASK ((__force gfp_t)((1 << __GFP_BITS_SHIFT) - 1))
 
 /**

@@ -190,7 +190,7 @@ int __anon_vma_prepare(struct vm_area_struct *vma)
 	struct anon_vma_chain *avc;
 
 	mmap_assert_locked(mm);
-	might_sleep();
+	//might_sleep();
 
 	avc = anon_vma_chain_alloc(GFP_KERNEL);
 	if (!avc)
