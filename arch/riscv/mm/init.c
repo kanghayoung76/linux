@@ -34,6 +34,7 @@
 #include <asm/sections.h>
 #include <asm/soc.h>
 #include <asm/tlbflush.h>
+#include <asm/genesis.h>
 
 #include "../kernel/head.h"
 
@@ -73,11 +74,26 @@ phys_addr_t dma32_phys_limit __initdata;
 static void __init zone_sizes_init(void)
 {
 	unsigned long max_zone_pfns[MAX_NR_ZONES] = { 0, };
+#ifdef CONFIG_GENESIS
+#if (GENESIS_DEBUG)
+        pr_info("[GENESIS] dma32_phys_limit: %llx\n", dma32_phys_limit);
+        pr_info("[GENESIS] max_low_pfn: %lx \n", max_low_pfn);
+#endif
+#endif
 
 #ifdef CONFIG_ZONE_DMA32
-	max_zone_pfns[ZONE_DMA32] = PFN_DOWN(dma32_phys_limit);
+        max_zone_pfns[ZONE_DMA32] = PFN_DOWN(dma32_phys_limit);
 #endif
-	max_zone_pfns[ZONE_NORMAL] = max_low_pfn;
+#ifndef CONFIG_GENESIS
+        max_zone_pfns[ZONE_NORMAL] = max_low_pfn;
+#else
+        //FIXME: this configuration will be changed in a real board.
+#ifdef CONFIG_ZONE_DMA32
+        max_zone_pfns[ZONE_DMA32] -= GENESIS_ZONE_SZ; // XXX: maybe REMOVE
+#endif
+        max_zone_pfns[ZONE_NORMAL] = max_low_pfn - GENESIS_ZONE_SZ;
+        max_zone_pfns[ZONE_GENESIS] = max_low_pfn;
+#endif
 
 	free_area_init(max_zone_pfns);
 }
@@ -282,7 +298,24 @@ static void __init setup_bootmem(void)
 	dma32_phys_limit = min(4UL * SZ_1G, (unsigned long)PFN_PHYS(max_low_pfn));
 	set_max_mapnr(max_low_pfn - ARCH_PFN_OFFSET);
 
-	reserve_initrd_mem();
+#ifdef CONFIG_GENESIS
+#if (GENESIS_DEBUG) // for debug
+        pr_info("[GENESIS] memblock_set_current_limit\n");
+        pr_info("[GENESIS] min_low_pfn: %lx, max_low_pfn: %lx\n",
+                min_low_pfn, max_low_pfn);
+        pr_info("[GENESIS] phys_ram_end: %llx\n", phys_ram_end);
+        pr_info("[GENESIS] GENESIS_ZONE region : %llx - %llx\n",
+                /*start*/ phys_ram_end - (GENESIS_ZONE_SZ << PAGE_SHIFT),
+                /*end*/ phys_ram_end);
+#endif
+        memblock_set_current_limit(phys_ram_end - (GENESIS_ZONE_SZ << PAGE_SHIFT));
+#endif
+
+        reserve_initrd_mem();
+
+#ifdef CONFIG_GENESIS // XXX: RESOLVE and REMOVE
+        pr_info("[GENESIS][FIXME] dtb_early_pa takes up the GENESIS memory.\n");
+#endif
 
 	/*
 	 * No allocation should be done before reserving the memory as defined
@@ -1245,6 +1278,7 @@ static void __meminit create_linear_mapping_range(phys_addr_t start, phys_addr_t
 {
 	phys_addr_t pa;
 	uintptr_t va, map_size;
+	uintptr_t shadow_va;
 
 	for (pa = start; pa < end; pa += map_size) {
 		va = (uintptr_t)__va(pa);
@@ -1253,6 +1287,14 @@ static void __meminit create_linear_mapping_range(phys_addr_t start, phys_addr_t
 
 		create_pgd_mapping(swapper_pg_dir, va, pa, map_size,
 				   pgprot ? *pgprot : pgprot_from_va(va));
+#ifdef CONFIG_GENESIS
+                        /* Create shadow mappings */
+                        shadow_va = (uintptr_t)__virt_to_shadow(va);
+                        //pr_info("va: %lx pa: %llx\n", shadow_va, pa);
+                        create_pgd_mapping(swapper_pg_dir, shadow_va, pa,
+                                           map_size, PAGE_SHADOW);
+#endif
+
 	}
 }
 
@@ -1315,6 +1357,17 @@ static void __init create_linear_mapping_page_table(void)
 static void __init setup_vm_final(void)
 {
 	/* Setup swapper PGD for fixmap */
+        uintptr_t va, map_size;
+        phys_addr_t pa, start, end;
+        u64 i;
+#ifdef CONFIG_GENESIS
+        uintptr_t shadow_va;
+        phys_addr_t prev_memblock_current_limit;
+
+        pr_info("[GENESIS] Open GENESIS_ZONE to memblock \n");
+        prev_memblock_current_limit = memblock_get_current_limit();
+        memblock_set_current_limit(MEMBLOCK_ALLOC_ANYWHERE);
+#endif
 #if !defined(CONFIG_64BIT)
 	/*
 	 * In 32-bit, the device tree lies in a pgd entry, so it must be copied
@@ -1349,6 +1402,11 @@ static void __init setup_vm_final(void)
 	/* Move to swapper page table */
 	csr_write(CSR_SATP, PFN_DOWN(__pa_symbol(swapper_pg_dir)) | satp_mode);
 	local_flush_tlb_all();
+
+#ifdef CONFIG_GENESIS
+        pr_info("[GENESIS] Close GENESIS_ZONE to memblock!\n");
+        memblock_set_current_limit(prev_memblock_current_limit);
+#endif
 
 	pt_ops_set_late();
 }

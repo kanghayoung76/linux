@@ -9,6 +9,7 @@
 #include <linux/bits.h>
 #include <linux/const.h>
 #include <asm/errata_list.h>
+#include <asm/genesis.h>
 
 extern bool pgtable_l4_enabled;
 extern bool pgtable_l5_enabled;
