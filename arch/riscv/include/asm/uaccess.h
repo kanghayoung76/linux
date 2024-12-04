@@ -468,7 +468,6 @@ unsigned long __must_check clear_user(void __user *to, unsigned long n)
                         return n;
                 }
 */
-
                 return _genesis_uaccess_entry(
                                 /*svc_num*/ GENESIS_CLEAR_USER,
                                 /*arg0*/ (unsigned long)to,
