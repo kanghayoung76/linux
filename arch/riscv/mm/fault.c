@@ -19,6 +19,7 @@
 
 #include <asm/ptrace.h>
 #include <asm/tlbflush.h>
+#include <asm/genesis.h>
 
 #include "../kernel/head.h"
 
