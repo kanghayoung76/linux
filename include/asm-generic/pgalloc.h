@@ -16,6 +16,7 @@
  *
  * Return: pointer to the allocated memory or %NULL on error
  */
+#ifndef CONFIG_GENESIS
 static inline pte_t *__pte_alloc_one_kernel_noprof(struct mm_struct *mm)
 {
 	struct ptdesc *ptdesc = pagetable_alloc_noprof(GFP_PGTABLE_KERNEL &
@@ -25,6 +26,19 @@ static inline pte_t *__pte_alloc_one_kernel_noprof(struct mm_struct *mm)
 		return NULL;
 	return ptdesc_address(ptdesc);
 }
+#else
+static inline pte_t *__pte_alloc_one_kernel(struct mm_struct *mm)
+{
+        pte_t *pte = (pte_t *)__get_free_page(__GFP_GENESIS);
+        if (pte)
+                _genesis_entry(/*svc_num*/ GENESIS_INIT_PTE,
+                               /*arg0*/ (unsigned long)pte,
+                               /*arg1*/ 0);
+        return pte;
+
+}
+#endif
+
 #define __pte_alloc_one_kernel(...)	alloc_hooks(__pte_alloc_one_kernel_noprof(__VA_ARGS__))
 
 #ifndef __HAVE_ARCH_PTE_ALLOC_ONE_KERNEL
