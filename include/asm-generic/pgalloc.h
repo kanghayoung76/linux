@@ -27,14 +27,16 @@ static inline pte_t *__pte_alloc_one_kernel_noprof(struct mm_struct *mm)
 	return ptdesc_address(ptdesc);
 }
 #else
-static inline pte_t *__pte_alloc_one_kernel(struct mm_struct *mm)
+static inline pte_t *__pte_alloc_one_kernel_noprof(struct mm_struct *mm)
 {
-        pte_t *pte = (pte_t *)__get_free_page(__GFP_GENESIS);
-        if (pte)
+	struct ptdesc *ptdesc = pagetable_alloc_noprof(__GFP_GENESIS &
+			~__GFP_HIGHMEM, 0);
+//        pte_t *pte = (pte_t *)__get_free_page(__GFP_GENESIS);
+        if (ptdesc)
                 _genesis_entry(/*svc_num*/ GENESIS_INIT_PTE,
-                               /*arg0*/ (unsigned long)pte,
+                               /*arg0*/ (unsigned long)ptdesc_address(ptdesc),
                                /*arg1*/ 0);
-        return pte;
+        return ptdesc_address(ptdesc);
 
 }
 #endif
@@ -88,6 +90,11 @@ static inline pgtable_t __pte_alloc_one_noprof(struct mm_struct *mm, gfp_t gfp)
 		pagetable_free(ptdesc);
 		return NULL;
 	}
+#ifdef CONFIG_GENESIS
+        _genesis_entry(/*svc_num*/ GENESIS_INIT_PTE,
+                       /*arg0*/ (unsigned long)ptdesc_address(ptdesc),
+                       /*arg1*/ 0);
+#endif
 
 	return ptdesc_page(ptdesc);
 }
@@ -104,7 +111,11 @@ static inline pgtable_t __pte_alloc_one_noprof(struct mm_struct *mm, gfp_t gfp)
  */
 static inline pgtable_t pte_alloc_one_noprof(struct mm_struct *mm)
 {
+#ifndef CONFIG_GENESIS
 	return __pte_alloc_one_noprof(mm, GFP_PGTABLE_USER);
+#else
+        return __pte_alloc_one_noprof(mm, (__GFP_GENESIS|__GFP_ACCOUNT));
+#endif
 }
 #define pte_alloc_one(...)	alloc_hooks(pte_alloc_one_noprof(__VA_ARGS__))
 #endif
@@ -142,6 +153,7 @@ static inline void pte_free(struct mm_struct *mm, struct page *pte_page)
  *
  * Return: pointer to the allocated memory or %NULL on error
  */
+#ifndef CONFIG_GENESIS
 static inline pmd_t *pmd_alloc_one_noprof(struct mm_struct *mm, unsigned long addr)
 {
 	struct ptdesc *ptdesc;
@@ -158,6 +170,29 @@ static inline pmd_t *pmd_alloc_one_noprof(struct mm_struct *mm, unsigned long ad
 	}
 	return ptdesc_address(ptdesc);
 }
+#else
+static inline pmd_t *pmd_alloc_one_noprof(struct mm_struct *mm, unsigned long addr)
+{
+	pmd_t *pmd;
+	struct ptdesc *ptdesc;
+        gfp_t gfp = __GFP_GENESIS;
+
+        if (mm != &init_mm)
+                gfp |= __GFP_ACCOUNT;
+        ptdesc = pagetable_alloc_noprof(gfp, 0);
+        if (!ptdesc)
+                return NULL;
+        if (!pagetable_pmd_ctor(ptdesc)) {
+                pagetable_free(ptdesc);
+                return NULL;
+        }
+        pmd = (pmd_t *)ptdesc_address(ptdesc);
+        _genesis_entry(/*svc_num*/ GENESIS_INIT_PMD,
+                       /*arg0*/ (unsigned long)pmd,
+                       /*arg1*/ 0);
+        return pmd;
+}
+#endif /* CONFIG_GENESIS */
 #define pmd_alloc_one(...)	alloc_hooks(pmd_alloc_one_noprof(__VA_ARGS__))
 #endif
 
@@ -176,6 +211,7 @@ static inline void pmd_free(struct mm_struct *mm, pmd_t *pmd)
 
 #if CONFIG_PGTABLE_LEVELS > 3
 
+#ifndef CONFIG_GENESIS
 static inline pud_t *__pud_alloc_one_noprof(struct mm_struct *mm, unsigned long addr)
 {
 	gfp_t gfp = GFP_PGTABLE_USER;
@@ -192,6 +228,29 @@ static inline pud_t *__pud_alloc_one_noprof(struct mm_struct *mm, unsigned long 
 	pagetable_pud_ctor(ptdesc);
 	return ptdesc_address(ptdesc);
 }
+#else
+static inline pud_t *__pud_alloc_one_noprof(struct mm_struct *mm, unsigned long addr)
+{
+        pud_t *pud;
+        gfp_t gfp = __GFP_GENESIS;
+	struct ptdesc *ptdesc;
+
+        if (mm != &init_mm)
+                gfp |= __GFP_ACCOUNT;
+        gfp &= ~__GFP_HIGHMEM;
+
+	ptdesc = pagetable_alloc_noprof(gfp, 0);
+        pud = (pud_t *)ptdesc_address(ptdesc);
+        if (pud) {
+                _genesis_entry(/*svc_num*/ GENESIS_INIT_PUD,
+                               /*arg0*/ (unsigned long)pud,
+                               /*arg1*/ 0);
+        }
+
+        return pud;
+}
+#endif
+
 #define __pud_alloc_one(...)	alloc_hooks(__pud_alloc_one_noprof(__VA_ARGS__))
 
 #ifndef __HAVE_ARCH_PUD_ALLOC_ONE

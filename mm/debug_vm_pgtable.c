@@ -42,6 +42,8 @@
  * or the documentation need to be in sync.
  */
 #define RANDOM_NZVALUE	GENMASK(7, 0)
+#define ARCH_SKIP_MASK (S390_SKIP_MASK | PPC64_SKIP_MASK)
+#define RANDOM_ORVALUE (GENMASK(BITS_PER_LONG - 1, 0) & ~ARCH_SKIP_MASK)
 
 struct pgtable_debug_args {
 	struct mm_struct	*mm;
