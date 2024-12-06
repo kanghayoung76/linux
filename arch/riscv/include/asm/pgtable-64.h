@@ -201,7 +201,13 @@ static inline int pud_user(pud_t pud)
 
 static inline void set_pud(pud_t *pudp, pud_t pud)
 {
+#ifndef CONFIG_GENESIS
 	WRITE_ONCE(*pudp, pud);
+#else
+        _genesis_entry(/*svc_num*/ GENESIS_SET_PUD,
+                       /*arg0*/ (unsigned long)pudp,
+                       /*arg1*/ pud_val(pud));
+#endif
 }
 
 static inline void pud_clear(pud_t *pudp)
@@ -276,9 +282,15 @@ static inline unsigned long _pmd_pfn(pmd_t pmd)
 
 static inline void set_p4d(p4d_t *p4dp, p4d_t p4d)
 {
-	if (pgtable_l4_enabled)
+        if (pgtable_l4_enabled)
+#ifndef CONFIG_GENESIS
 		WRITE_ONCE(*p4dp, p4d);
-	else
+#else
+                _genesis_entry(/*svc_num*/ GENESIS_SET_P4D,
+                               /*arg0*/ (unsigned long)p4dp,
+                               /*arg1*/ p4d_val(p4d));
+#endif
+        else
 		set_pud((pud_t *)p4dp, (pud_t){ p4d_val(p4d) });
 }
 
@@ -341,6 +353,17 @@ static inline struct page *p4d_page(p4d_t p4d)
 #define pud_offset pud_offset
 pud_t *pud_offset(p4d_t *p4d, unsigned long address);
 
+#ifdef CONFIG_GENESIS
+static inline void set_pgd(pgd_t *pgdp, pgd_t pgd)
+{
+        if (pgtable_l5_enabled)
+                _genesis_entry(/*svc_num*/ GENESIS_SET_PGD,
+                               /*arg0*/ (unsigned long)pgdp,
+                               /*arg1*/ pgd_val(pgd));
+        else
+                set_p4d((p4d_t *)pgdp, (p4d_t){ pgd_val(pgd) });
+}
+#else
 static inline void set_pgd(pgd_t *pgdp, pgd_t pgd)
 {
 	if (pgtable_l5_enabled)
@@ -348,6 +371,7 @@ static inline void set_pgd(pgd_t *pgdp, pgd_t pgd)
 	else
 		set_p4d((p4d_t *)pgdp, (p4d_t){ pgd_val(pgd) });
 }
+#endif
 
 static inline int pgd_none(pgd_t pgd)
 {
