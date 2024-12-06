@@ -8,6 +8,7 @@
 #include <linux/topology.h>
 #include <linux/alloc_tag.h>
 #include <linux/sched.h>
+#include <asm/genesis.h>
 
 /* The typedef is in types.h but we want the documentation here */
 #if 0
@@ -72,10 +73,13 @@ struct mempolicy;
 #endif
 #ifdef CONFIG_GENESIS
 #define ___GFP_GENESIS          0x10000000u
+#define ___GFP_SFK          	0x20000000u
 #else
 #define ___GFP_GENESIS          0
+#define ___GFP_SFK          	0
 #endif
 #define __GFP_GENESIS   ((__force gfp_t)___GFP_GENESIS)
+#define __GFP_SFK   	((__force gfp_t)___GFP_SFK)
 /* If the above are modified, __GFP_BITS_SHIFT may need updating */
 
 /*
@@ -486,6 +490,7 @@ static inline enum zone_type gfp_zone(gfp_t flags)
 	int bit = (__force int) (flags & GFP_ZONEMASK);
 
 #ifdef CONFIG_GENESIS
+        if (a==1) printk("aaa\n");
         if (flags & __GFP_GENESIS) return ZONE_GENESIS;
 #endif
 

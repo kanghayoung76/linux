@@ -28,6 +28,7 @@
 #define GENESIS_INIT_PMD	17 // Init PMD
 #define GENESIS_INIT_PTE	18 // Init PTE
 #define GENESIS_WRITE_TVEC	19 // Set STVEC
+#define SFK_WRITE_HGATP		20 // HGATP update
 
 #ifndef __ASSEMBLY__
 
@@ -60,12 +61,14 @@ extern unsigned long shadow_offset_base;
 /***********************************************************/
 /* ZONE_GENESIS (page tables)                              */
 /***********************************************************/
-#define GENESIS_ZONE_SZ 0x40000 // Reserve 1GB (0x40000 * 4K)
+#define GENESIS_ZONE_SZ 0x3fe00 // Reserve 1GB (0x40000 * 4K)
+#define SFK_ZONE_SZ	0x200	// Reserve 2MB (0x200   * 4K)
 
 /***********************************************************/
 /* MISC (debug)                                            */
 /***********************************************************/
 #define GENESIS_DEBUG 1
+extern int a;
 
 #endif /* __ASSEMBLY__ */
 
