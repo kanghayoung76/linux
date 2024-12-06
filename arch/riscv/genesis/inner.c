@@ -4,6 +4,7 @@
 
 /* PRIVILEGED INSTRUCTIONS */
 extern void _genesis_write_satp(unsigned long pgd);
+extern void _sfk_write_hgatp(unsigned long pgd);
 extern void _genesis_write_csr(unsigned long arg0);
 extern void _genesis_set_csr(unsigned long arg0);
 extern void _genesis_write_tvec(unsigned long arg0);
@@ -153,6 +154,9 @@ unsigned long __genesis inner_handler(unsigned long svc_num,
 	/* Privileged operations */
 	case GENESIS_WRITE_SATP:
 		_genesis_write_satp(arg0);
+		break;
+	case SFK_WRITE_HGATP:
+		_sfk_write_hgatp(arg0);
 		break;
 	case GENESIS_WRITE_CSR:
 		_genesis_write_csr(arg0);
