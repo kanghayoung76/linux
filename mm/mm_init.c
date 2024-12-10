@@ -1770,15 +1770,19 @@ void __init free_area_init(unsigned long *max_zone_pfn)
 	descending = arch_has_descending_max_zone_pfns();
 
 	for (i = 0; i < MAX_NR_ZONES; i++) {
-		if (descending)
+		if (descending){
 			zone = MAX_NR_ZONES - i - 1;
-		else
+			printk("----1zone_names[%d]: %-8s, zone= %d",i,zone_names[i],MAX_NR_ZONES - i - 1);
+		}
+		else{
 			zone = i;
-
+			printk("----2zone_names[%d]: %-8s, zone= %d",i,zone_names[i],i);
+		}
 		if (zone == ZONE_MOVABLE)
 			continue;
 
 		end_pfn = max(max_zone_pfn[zone], start_pfn);
+		printk("-----max_zone_pfn[%d] : %llx\n",i,max_zone_pfn[i]);
 		arch_zone_lowest_possible_pfn[zone] = start_pfn;
 		arch_zone_highest_possible_pfn[zone] = end_pfn;
 

@@ -3050,13 +3050,7 @@ struct page *rmqueue(struct zone *preferred_zone,
 	WARN_ON_ONCE((gfp_flags & __GFP_NOFAIL) && (order > 1));
 
 	if (likely(pcp_allowed_order(order))) {
-//		page = rmqueue_pcplist(preferred_zone, zone, order, migratetype, alloc_flags);
 		page = rmqueue_pcplist(preferred_zone, zone, order, migratetype, alloc_flags);
-		if (a==1){
-			printk("----------------------------rmqueue page : 0x%px\n",page_to_virt(page));
-			printk("----------------------------rmqueue preferred_zone: %s\n",preferred_zone->name);
-			printk("----------------------------rmqueue zone : %s\n",zone->name);
-		}
 		if (likely(page))
 			goto out;
 	}
@@ -3073,8 +3067,6 @@ out:
 	}
 
 	VM_BUG_ON_PAGE(page && bad_range(zone, page), page);
-	if (a==1)
-		printk("----------------------------rmqueue : 0x%px\n",page_to_virt(page));
 	return page;
 }
 
@@ -3322,9 +3314,6 @@ static struct page *
 get_page_from_freelist(gfp_t gfp_mask, unsigned int order, int alloc_flags,
 						const struct alloc_context *ac)
 {
-	if (a==1){
-		printk("-------------get_page gfp : 0x%px\n",gfp_mask);
-	}
 	struct zoneref *z;
 	struct zone *zone;
 	struct pglist_data *last_pgdat = NULL;
@@ -3460,20 +3449,9 @@ check_alloc_wmark:
 		}
 
 try_this_zone:
-		if(a==1){
-			struct pglist_data *pgdat = &contig_page_data;
-			struct zone *zzone = &pgdat->node_zones[ZONE_GENESIS];
-			printk("&pgdat->node_zones[ZONE_SFK]->name : %s\n",zzone->name);
-//			page = rmqueue(&pgdat->node_zones[ZONE_GENESIS], &pgdat->node_zones[ZONE_GENESIS], order, gfp_mask, alloc_flags, ac->migratetype);
-			page = rmqueue(zzone, zzone, order,
+		page = rmqueue(ac->preferred_zoneref->zone, zone, order,
 					gfp_mask, alloc_flags, ac->migratetype);
-			printk("-------------get_page gfp : 0x%px\n",gfp_mask);
-			printk("-------------get_page page : 0x%px\n",page_to_virt(page));
-		}
-		else{
-			page = rmqueue(ac->preferred_zoneref->zone, zone, order,
-					gfp_mask, alloc_flags, ac->migratetype);
-		}
+		
 		if (page) {
 			prep_new_page(page, order, gfp_mask, alloc_flags);
 
@@ -3526,7 +3504,6 @@ static void warn_alloc_show_mem(gfp_t gfp_mask, nodemask_t *nodemask)
 			filter &= ~SHOW_MEM_FILTER_NODES;
 	if (!in_task() || !(gfp_mask & __GFP_DIRECT_RECLAIM))
 		filter &= ~SHOW_MEM_FILTER_NODES;
-
 	__show_mem(filter, nodemask, gfp_zone(gfp_mask));
 }
 
@@ -4487,6 +4464,7 @@ static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
 {
 	ac->highest_zoneidx = gfp_zone(gfp_mask);
 	ac->zonelist = node_zonelist(preferred_nid, gfp_mask);
+
 	ac->nodemask = nodemask;
 	ac->migratetype = gfp_migratetype(gfp_mask);
 
@@ -4519,7 +4497,6 @@ static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
 	 */
 	ac->preferred_zoneref = first_zones_zonelist(ac->zonelist,
 					ac->highest_zoneidx, ac->nodemask);
-
 	return true;
 }
 
@@ -4710,9 +4687,7 @@ struct page *__alloc_pages_noprof(gfp_t gfp, unsigned int order,
 	if (WARN_ON_ONCE_GFP(order > MAX_PAGE_ORDER, gfp))
 		return NULL;
 
-	//gfp &= gfp_allowed_mask;
-	if (a==1)
-		printk("-------------gfp : 0x%px",gfp);
+	gfp &= gfp_allowed_mask;
 	/*
 	 * Apply scoped allocation constraints. This is mainly about GFP_NOFS
 	 * resp. GFP_NOIO which has to be inherited for all allocation requests
@@ -4720,9 +4695,7 @@ struct page *__alloc_pages_noprof(gfp_t gfp, unsigned int order,
 	 * memalloc_no{fs,io}_{save,restore}. And PF_MEMALLOC_PIN which ensures
 	 * movable zones are not used during allocation.
 	 */
-	//gfp = current_gfp_context(gfp);
-	if (a==1)
-		printk("-------------gfp : 0x%px",gfp);
+	gfp = current_gfp_context(gfp);
 	alloc_gfp = gfp;
 	if (!prepare_alloc_pages(gfp, order, preferred_nid, nodemask, &ac,
 			&alloc_gfp, &alloc_flags))
@@ -4736,16 +4709,10 @@ struct page *__alloc_pages_noprof(gfp_t gfp, unsigned int order,
 
 	/* First allocation attempt */
 	page = get_page_from_freelist(alloc_gfp, order, alloc_flags, &ac);
-	if (a==1){
-		printk("-------------out gfp : 0x%px\n",alloc_gfp);
-		printk("------------------page : 0x%px\n",page_to_virt(page));
-	}
 	if (likely(page))
 		goto out;
 
 	alloc_gfp = gfp;
-	if (a==1)
-		printk("-------------gfp : 0x%px",alloc_gfp);
 	ac.spread_dirty_pages = false;
 
 	/*
@@ -4754,16 +4721,9 @@ struct page *__alloc_pages_noprof(gfp_t gfp, unsigned int order,
 	 */
 	ac.nodemask = nodemask;
 	
-	if (a==1)
-		printk("-------------gfp : 0x%px",alloc_gfp);
-
 	page = __alloc_pages_slowpath(alloc_gfp, order, &ac);
 
 out:
-	if (a==1){
-		printk("-------------out gfp : 0x%px\n",alloc_gfp);
-		printk("------------------page : 0x%px\n",page_to_virt(page));
-	}
 	if (memcg_kmem_online() && (gfp & __GFP_ACCOUNT) && page &&
 	    unlikely(__memcg_kmem_charge_page(page, gfp, order) != 0)) {
 		__free_pages(page, order);
@@ -4772,10 +4732,6 @@ out:
 
 	trace_mm_page_alloc(page, order, alloc_gfp, ac.migratetype);
 	kmsan_alloc_page(page, order, alloc_gfp);
-	if (a==1){
-		printk("-------------out gfp : 0x%px\n",alloc_gfp);
-		printk("------------------page : 0x%px\n",page_to_virt(page));
-	}
 	return page;
 }
 EXPORT_SYMBOL(__alloc_pages_noprof);

@@ -24,6 +24,7 @@
 #include <linux/local_lock.h>
 #include <linux/zswap.h>
 #include <asm/page.h>
+#include <asm/genesis.h>
 
 /* Free memory management - zoned buddy allocator.  */
 #ifndef CONFIG_ARCH_FORCE_MAX_ORDER
@@ -1644,8 +1645,18 @@ static __always_inline struct zoneref *next_zones_zonelist(struct zoneref *z,
 					enum zone_type highest_zoneidx,
 					nodemask_t *nodes)
 {
-	if (likely(!nodes && zonelist_zone_idx(z) <= highest_zoneidx))
+	if (likely(!nodes && zonelist_zone_idx(z) <= highest_zoneidx)){
+//		if(a==1){
+//			printk("----------------next_zones_zonelist, zonelist_zone_idx(z) : %d\n",zonelist_zone_idx(z));
+//			printk("----------------z : %s\n",z->zone->name);
+//		}
 		return z;
+	}
+//        if(a==1){
+//        	printk("----------------next_zones_zonelist, zonelist_zone_idx(z) : %d\n",zonelist_zone_idx(z));
+//                printk("----------------z : %s\n",z->zone->name);
+//        }
+
 	return __next_zones_zonelist(z, highest_zoneidx, nodes);
 }
 
@@ -1670,6 +1681,19 @@ static inline struct zoneref *first_zones_zonelist(struct zonelist *zonelist,
 					enum zone_type highest_zoneidx,
 					nodemask_t *nodes)
 {
+/*
+	if (a==1){
+		for (int i = 0; i < MAX_ZONES_PER_ZONELIST; i++) {
+    			struct zoneref *z = &zonelist->_zonerefs[i];
+
+    			if (z->zone) {
+        			printk("zoneref[%d]: zone name = %s, zone_idx = %d\n",i, z->zone->name, z->zone_idx);
+    			} else {
+        			printk("zoneref[%d]: zone = NULL, zone_idx = %d\n", i, z->zone_idx);
+    			}
+		}
+	}
+*/
 	return next_zones_zonelist(zonelist->_zonerefs,
 							highest_zoneidx, nodes);
 }

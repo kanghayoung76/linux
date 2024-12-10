@@ -89,12 +89,15 @@ static void __init zone_sizes_init(void)
 #else
         //FIXME: this configuration will be changed in a real board.
 #ifdef CONFIG_ZONE_DMA32
-        max_zone_pfns[ZONE_DMA32] -= GENESIS_ZONE_SZ; // XXX: maybe REMOVE
         max_zone_pfns[ZONE_DMA32] -= SFK_ZONE_SZ; // XXX: maybe REMOVE
+        max_zone_pfns[ZONE_DMA32] -= GENESIS_ZONE_SZ; // XXX: maybe REMOVE
 #endif
         max_zone_pfns[ZONE_NORMAL] = max_low_pfn - GENESIS_ZONE_SZ - SFK_ZONE_SZ;
         max_zone_pfns[ZONE_SFK] = max_low_pfn - GENESIS_ZONE_SZ;
+	pr_info("-----------------max_zone_pfns[ZONE_SFK]: %llx\n",max_zone_pfns[ZONE_SFK]);
         max_zone_pfns[ZONE_GENESIS] = max_low_pfn;
+	pr_info("-----------------max_zone_pfns[ZONE_GENESIS]: %llx\n",max_zone_pfns[ZONE_GENESIS]);
+
 #endif
 
 	free_area_init(max_zone_pfns);

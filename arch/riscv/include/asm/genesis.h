@@ -61,8 +61,8 @@ extern unsigned long shadow_offset_base;
 /***********************************************************/
 /* ZONE_GENESIS (page tables)                              */
 /***********************************************************/
-#define GENESIS_ZONE_SZ 0x3fe00 // Reserve 1GB (0x40000 * 4K)
-#define SFK_ZONE_SZ	0x200	// Reserve 2MB (0x200   * 4K)
+#define SFK_ZONE_SZ	0x20000	// Reserve 2MB (0x200   * 4K)
+#define GENESIS_ZONE_SZ 0x20000 // Reserve 1GB (0x40000 * 4K)
 
 /***********************************************************/
 /* MISC (debug)                                            */

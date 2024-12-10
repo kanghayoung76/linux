@@ -62,13 +62,14 @@ struct zoneref *__next_zones_zonelist(struct zoneref *z,
 	 * Only filter based on nodemask if it's set
 	 */
 	if (unlikely(nodes == NULL))
-		while (zonelist_zone_idx(z) > highest_zoneidx)
+		while (zonelist_zone_idx(z) > highest_zoneidx){
 			z++;
+		}
 	else
 		while (zonelist_zone_idx(z) > highest_zoneidx ||
-				(z->zone && !zref_in_nodemask(z, nodes)))
+				(z->zone && !zref_in_nodemask(z, nodes))){
 			z++;
-
+		}
 	return z;
 }
 

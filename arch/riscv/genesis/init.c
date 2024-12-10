@@ -71,6 +71,7 @@ static void __init sfk_mapping(void){
 	int *sfk;
 	a = 1;
         sfk = (int *)__get_free_page(__GFP_SFK);
+//        sfk = (int *)__get_free_page(__GFP_GENESIS);
 	a = 0;
         pr_info("[SFK] sfk va: 0x%px pa: 0x%lx (GFP_SFK)\n", sfk, __pa(sfk));
 	
