@@ -56,7 +56,7 @@ static void __init sfk_mapping(void){
         printk("[SFK] #### guest PT mapping ####\n");
         pgprot_t pprot;
         pprot.pgprot = _PAGE_READ | _PAGE_WRITE | _PAGE_VALID | _PAGE_USER | _PAGE_ACCESSED | _PAGE_DIRTY;
-        create_pgd_mapping(phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT),0x63fe00000,0xbfe00000,PMD_SIZE,pprot);
+        create_pgd_mapping(phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT),0x10000000,0xc0000000,PMD_SIZE,pprot);
         /// create 3-level page table for pgd, virtual address, physical address, size, prot 
     	uint64_t ggp;
     	asm volatile(
@@ -68,13 +68,6 @@ static void __init sfk_mapping(void){
         printk("[SFK] #### tlb flush ####\n");
         asm volatile("sfence.vma" ::: "memory");
 
-	int *sfk;
-	a = 1;
-        sfk = (int *)__get_free_page(__GFP_SFK);
-//        sfk = (int *)__get_free_page(__GFP_GENESIS);
-	a = 0;
-        pr_info("[SFK] sfk va: 0x%px pa: 0x%lx (GFP_SFK)\n", sfk, __pa(sfk));
-	
 }
 
 void __init sfk_test(void)
@@ -96,7 +89,7 @@ void __init sfk_test(void)
         pr_info("[SFK] 2. GENESIS user HVA : 0x%px value : %d\n", shadow_sfk, *shadow_sfk);
         __disable_user_access();
 
-        void* base = (void*)0x63fe00000;
+        void* base = (void*)0x10000000;
         unsigned long vall = 0;
         asm volatile(HLV_W(%[val], %[addr]) :[val] "=&r" (vall): [addr] "r" (base) );
         pr_info("[SFK] 3. SFK vm GPA : 0x%px value : %d\n", sfk, vall);
@@ -199,6 +192,6 @@ void __init genesis_init(void)
 	genesis_enabled = 1;
 
 	sfk_mapping();
-//	sfk_test();
+	sfk_test();
 	genesis_zone_set_readonly();
 }
