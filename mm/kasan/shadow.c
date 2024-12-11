@@ -534,6 +534,7 @@ void kasan_release_vmalloc(unsigned long start, unsigned long end,
 void *__kasan_unpoison_vmalloc(const void *start, unsigned long size,
 			       kasan_vmalloc_flags_t flags)
 {
+	printk("-----this is shadow.c\n");
 	/*
 	 * Software KASAN modes unpoison both VM_ALLOC and non-VM_ALLOC
 	 * mappings, so the KASAN_VMALLOC_VM_ALLOC flag is ignored.

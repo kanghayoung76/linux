@@ -18,7 +18,7 @@ DEFINE_STATIC_KEY_FALSE(dynamic_scs_enabled);
 
 static void __scs_account(void *s, int account)
 {
-	struct page *scs_page = vmalloc_to_page(s);
+	struct page *scs_page = vmalloc_to_page(s); //s page return, not new page allocation
 
 	mod_node_page_state(page_pgdat(scs_page), NR_KERNEL_SCS_KB,
 			    account * (SCS_SIZE / SZ_1K));
@@ -33,6 +33,7 @@ static void *__scs_alloc(int node)
 	int i;
 	void *s;
 
+#ifndef CONFIG_GENESIS
 	for (i = 0; i < NR_CACHED_SCS; i++) {
 		s = this_cpu_xchg(scs_cache[i], NULL);
 		if (s) {
@@ -46,6 +47,9 @@ static void *__scs_alloc(int node)
 	s = __vmalloc_node_range(SCS_SIZE, 1, VMALLOC_START, VMALLOC_END,
 				    GFP_SCS, PAGE_KERNEL, 0, node,
 				    __builtin_return_address(0));
+#else
+	s = (void *)__get_free_page(__GFP_SFK);
+#endif
 
 out:
 	return kasan_reset_tag(s);
@@ -82,12 +86,14 @@ void scs_free(void *s)
 	 * to free the stack.
 	 */
 
+#ifndef CONFIG_GENESIS
 	for (i = 0; i < NR_CACHED_SCS; i++)
 		if (this_cpu_cmpxchg(scs_cache[i], 0, s) == NULL)
 			return;
+#endif
 
 	kasan_unpoison_vmalloc(s, SCS_SIZE, KASAN_VMALLOC_PROT_NORMAL);
-	vfree_atomic(s);
+	//vfree_atomic(s);
 }
 
 static int scs_cleanup(unsigned int cpu)
@@ -95,10 +101,12 @@ static int scs_cleanup(unsigned int cpu)
 	int i;
 	void **cache = per_cpu_ptr(scs_cache, cpu);
 
+#ifndef CONFIG_GENESIS
 	for (i = 0; i < NR_CACHED_SCS; i++) {
 		vfree(cache[i]);
 		cache[i] = NULL;
 	}
+#endif
 
 	return 0;
 }

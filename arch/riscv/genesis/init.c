@@ -30,7 +30,7 @@ extern char __privinst_begin[], __privinst_end[];
 extern char __genesis_text_begin[], __genesis_text_end[];
 
 #undef pr_fmt
-#define pr_fmt(fmt) "[GENESIS] " fmt
+#define pr_fmt(fmt) "[GE] " fmt
 
 #define gstage_pgd_size    (1UL << (HGATP_PAGE_SHIFT + 2))      ////
 
@@ -56,7 +56,8 @@ static void __init sfk_mapping(void){
         printk("[SFK] #### guest PT mapping ####\n");
         pgprot_t pprot;
         pprot.pgprot = _PAGE_READ | _PAGE_WRITE | _PAGE_VALID | _PAGE_USER | _PAGE_ACCESSED | _PAGE_DIRTY;
-        create_pgd_mapping(phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT),0x10000000,0xc0000000,PMD_SIZE,pprot);
+        create_pgd_mapping(phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT),0x40000000,0xc0000000,PMD_SIZE,pprot);
+        create_pgd_mapping(phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT),0x8160d000,virt_to_phys((void *)0xffffffff8160d000),PAGE_SIZE,pprot);
         /// create 3-level page table for pgd, virtual address, physical address, size, prot 
     	uint64_t ggp;
     	asm volatile(
@@ -192,6 +193,6 @@ void __init genesis_init(void)
 	genesis_enabled = 1;
 
 	sfk_mapping();
-	sfk_test();
+//	sfk_test();
 	genesis_zone_set_readonly();
 }

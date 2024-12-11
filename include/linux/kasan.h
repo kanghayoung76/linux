@@ -536,6 +536,7 @@ static __always_inline void *kasan_unpoison_vmalloc(const void *start,
 						unsigned long size,
 						kasan_vmalloc_flags_t flags)
 {
+	printk("-------------maybe\n");
 	if (kasan_enabled())
 		return __kasan_unpoison_vmalloc(start, size, flags);
 	return (void *)start;

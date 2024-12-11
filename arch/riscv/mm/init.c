@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+///*S*/ SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2012 Regents of the University of California
  * Copyright (C) 2019 Western Digital Corporation or its affiliates.
@@ -94,9 +94,7 @@ static void __init zone_sizes_init(void)
 #endif
         max_zone_pfns[ZONE_NORMAL] = max_low_pfn - GENESIS_ZONE_SZ - SFK_ZONE_SZ;
         max_zone_pfns[ZONE_SFK] = max_low_pfn - GENESIS_ZONE_SZ;
-	pr_info("-----------------max_zone_pfns[ZONE_SFK]: %llx\n",max_zone_pfns[ZONE_SFK]);
         max_zone_pfns[ZONE_GENESIS] = max_low_pfn;
-	pr_info("-----------------max_zone_pfns[ZONE_GENESIS]: %llx\n",max_zone_pfns[ZONE_GENESIS]);
 
 #endif
 
