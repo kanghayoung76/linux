@@ -34,6 +34,14 @@ extern char __genesis_text_begin[], __genesis_text_end[];
 
 #define gstage_pgd_size    (1UL << (HGATP_PAGE_SHIFT + 2))      ////
 
+void _sfk_shadow_stack(void)
+{
+//	printk("all good\n");
+}
+EXPORT_SYMBOL(_sfk_shadow_stack);
+void __pi__sfk_shadow_stack(void){}
+EXPORT_SYMBOL(__pi__sfk_shadow_stack);
+
 static void __init sfk_mapping(void){
 
         printk("[SFK] #### create guest pgd ####\n");

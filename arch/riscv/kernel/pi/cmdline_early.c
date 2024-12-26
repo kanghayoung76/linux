@@ -72,3 +72,6 @@ bool set_nokaslr_from_cmdline(uintptr_t dtb_pa)
 
 	return match_nokaslr(cmdline);
 }
+
+void* __pi__sfk_shadow_stack;
+EXPORT_SYMBOL(__pi__sfk_shadow_stack);
