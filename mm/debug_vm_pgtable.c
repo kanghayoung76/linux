@@ -35,6 +35,7 @@
 #include <asm/cacheflush.h>
 #include <asm/pgalloc.h>
 #include <asm/tlbflush.h>
+#include "/home/rkdgkdud/riscv-sfk/linux/arch/riscv/include/asm/genesis.h"
 
 /*
  * Please refer Documentation/mm/arch_pgtable_helpers.rst for the semantics
@@ -1316,6 +1317,8 @@ static int __init debug_vm_pgtable(void)
 	int idx, ret;
 
 	pr_info("Validating architecture page table helpers\n");
+	printk("--------------------test for genesis shadow : %d\n",a);
+
 	ret = init_args(&args);
 	if (ret)
 		return ret;

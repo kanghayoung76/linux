@@ -1,0 +1,42 @@
+
+lib/crc16.o:	file format elf64-littleriscv
+
+Disassembly of section .text:
+
+0000000000000000 <crc16>:
+       0: 29 ca        	beqz	a2, 0x52 <.Lpcrel_hi0+0x32>
+       2: a1 01        	addi	gp, gp, 8
+       4: 23 bc 11 fe  	sd	ra, -8(gp)
+       8: 55 45        	li	a0, 21
+       a: 93 85 81 ff  	addi	a1, gp, -8
+       e: 06 86        	mv	a2, ra
+      10: 97 00 00 00  	auipc	ra, 0
+      14: e7 80 00 00  	jalr	ra
+      18: 41 11        	addi	sp, sp, -16
+      1a: 06 e4        	sd	ra, 8(sp)
+      1c: 22 e0        	sd	s0, 0(sp)
+      1e: 00 08        	addi	s0, sp, 16
+
+0000000000000020 <.Lpcrel_hi0>:
+      20: 97 06 00 00  	auipc	a3, 0
+      24: 93 86 06 00  	mv	a3, a3
+      28: 03 c7 05 00  	lbu	a4, 0(a1)
+      2c: 7d 16        	addi	a2, a2, -1
+      2e: 29 8f        	xor	a4, a4, a0
+      30: 13 77 f7 0f  	andi	a4, a4, 255
+      34: 06 07        	slli	a4, a4, 1
+      36: 36 97        	add	a4, a4, a3
+      38: 03 17 07 00  	lh	a4, 0(a4)
+      3c: 85 05        	addi	a1, a1, 1
+      3e: 42 15        	slli	a0, a0, 48
+      40: 61 91        	srli	a0, a0, 56
+      42: 39 8d        	xor	a0, a0, a4
+      44: 75 f2        	bnez	a2, 0x28 <.Lpcrel_hi0+0x8>
+      46: a2 60        	ld	ra, 8(sp)
+      48: 02 64        	ld	s0, 0(sp)
+      4a: 41 01        	addi	sp, sp, 16
+      4c: 83 b0 81 ff  	ld	ra, -8(gp)
+      50: e1 11        	addi	gp, gp, -8
+      52: 42 15        	slli	a0, a0, 48
+      54: 41 91        	srli	a0, a0, 48
+      56: 82 80        	ret

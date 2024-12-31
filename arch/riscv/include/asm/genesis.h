@@ -29,6 +29,8 @@
 #define GENESIS_INIT_PTE	18 // Init PTE
 #define GENESIS_WRITE_TVEC	19 // Set STVEC
 #define SFK_WRITE_HGATP		20 // HGATP update
+#define GENESIS_SHADOW_CALL	21 // test for genesis shadow
+#define GENESIS_SHADOW_BACK	22 // test for genesis shadow
 
 #ifndef __ASSEMBLY__
 

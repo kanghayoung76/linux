@@ -30,7 +30,7 @@ extern char __privinst_begin[], __privinst_end[];
 extern char __genesis_text_begin[], __genesis_text_end[];
 
 #undef pr_fmt
-#define pr_fmt(fmt) "[GE] " fmt
+#define pr_fmt(fmt) "[] " fmt
 
 #define gstage_pgd_size    (1UL << (HGATP_PAGE_SHIFT + 2))      ////
 
@@ -41,6 +41,9 @@ void _sfk_shadow_stack(void)
 EXPORT_SYMBOL(_sfk_shadow_stack);
 void __pi__sfk_shadow_stack(void){}
 EXPORT_SYMBOL(__pi__sfk_shadow_stack);
+void __pi__genesis_entry(void){}
+EXPORT_SYMBOL(__pi__genesis_entry);
+
 
 static void __init sfk_mapping(void){
 
@@ -55,10 +58,10 @@ static void __init sfk_mapping(void){
         printk("[SFK] #### update HGATP ####\n");
         unsigned long hgatp = (HGATP_MODE_SV39X4 << HGATP_MODE_SHIFT);
         hgatp |= (page_to_phys(pgd_page) >> PAGE_SHIFT) & GENMASK(43,0);
-	_genesis_entry(/*svc_num*/ SFK_WRITE_HGATP,
-			/*arg0*/ hgatp,
-			/*arg1*/ 0);
-//        csr_write(CSR_HGATP, hgatp);                            /// hgatp update pointing pgd
+//	_genesis_entry(/*svc_num*/ SFK_WRITE_HGATP,
+//			/*arg0*/ hgatp,
+//			/*arg1*/ 0);
+        csr_write(CSR_HGATP, hgatp);                            /// hgatp update pointing pgd
         printk("[SFK] hgatp : 0x%lx\n",csr_read(CSR_HGATP));
 
         printk("[SFK] #### guest PT mapping ####\n");

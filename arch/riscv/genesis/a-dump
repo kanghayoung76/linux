@@ -1,0 +1,761 @@
+
+init.o:	file format elf64-littleriscv
+
+Disassembly of section .text:
+
+0000000000000000 <_sfk_shadow_stack>:
+       0: a1 01        	addi	gp, gp, 8
+       2: 23 bc 11 fe  	sd	ra, -8(gp)
+       6: 41 11        	addi	sp, sp, -16
+       8: 06 e4        	sd	ra, 8(sp)
+       a: 22 e0        	sd	s0, 0(sp)
+       c: 00 08        	addi	s0, sp, 16
+       e: a2 60        	ld	ra, 8(sp)
+      10: 02 64        	ld	s0, 0(sp)
+      12: 41 01        	addi	sp, sp, 16
+      14: 83 b0 81 ff  	ld	ra, -8(gp)
+      18: e1 11        	addi	gp, gp, -8
+      1a: 82 80        	ret
+
+000000000000001c <__pi__sfk_shadow_stack>:
+      1c: a1 01        	addi	gp, gp, 8
+      1e: 23 bc 11 fe  	sd	ra, -8(gp)
+      22: 41 11        	addi	sp, sp, -16
+      24: 06 e4        	sd	ra, 8(sp)
+      26: 22 e0        	sd	s0, 0(sp)
+      28: 00 08        	addi	s0, sp, 16
+      2a: a2 60        	ld	ra, 8(sp)
+      2c: 02 64        	ld	s0, 0(sp)
+      2e: 41 01        	addi	sp, sp, 16
+      30: 83 b0 81 ff  	ld	ra, -8(gp)
+      34: e1 11        	addi	gp, gp, -8
+      36: 82 80        	ret
+
+0000000000000038 <__pi__genesis_entry>:
+      38: a1 01        	addi	gp, gp, 8
+      3a: 23 bc 11 fe  	sd	ra, -8(gp)
+      3e: 41 11        	addi	sp, sp, -16
+      40: 06 e4        	sd	ra, 8(sp)
+      42: 22 e0        	sd	s0, 0(sp)
+      44: 00 08        	addi	s0, sp, 16
+      46: a2 60        	ld	ra, 8(sp)
+      48: 02 64        	ld	s0, 0(sp)
+      4a: 41 01        	addi	sp, sp, 16
+      4c: 83 b0 81 ff  	ld	ra, -8(gp)
+      50: e1 11        	addi	gp, gp, -8
+      52: 82 80        	ret
+
+Disassembly of section .init.text:
+
+0000000000000000 <sfk_test>:
+       0: a1 01        	addi	gp, gp, 8
+       2: 23 bc 11 fe  	sd	ra, -8(gp)
+       6: 79 71        	addi	sp, sp, -48
+       8: 06 f4        	sd	ra, 40(sp)
+       a: 22 f0        	sd	s0, 32(sp)
+       c: 26 ec        	sd	s1, 24(sp)
+       e: 4a e8        	sd	s2, 16(sp)
+      10: 4e e4        	sd	s3, 8(sp)
+      12: 52 e0        	sd	s4, 0(sp)
+      14: 00 18        	addi	s0, sp, 48
+
+0000000000000016 <.Lpcrel_hi0>:
+      16: 17 05 00 00  	auipc	a0, 0
+      1a: 13 05 05 00  	mv	a0, a0
+      1e: 97 00 00 00  	auipc	ra, 0
+      22: e7 80 00 00  	jalr	ra
+      26: 37 05 00 04  	lui	a0, 16384
+      2a: 81 45        	li	a1, 0
+      2c: 97 00 00 00  	auipc	ra, 0
+      30: e7 80 00 00  	jalr	ra
+      34: aa 84        	mv	s1, a0
+      36: 37 06 20 00  	lui	a2, 512
+      3a: 81 45        	li	a1, 0
+      3c: 97 00 00 00  	auipc	ra, 0
+      40: e7 80 00 00  	jalr	ra
+
+0000000000000044 <.Lpcrel_hi1>:
+      44: 17 05 00 00  	auipc	a0, 0
+      48: 13 09 05 00  	mv	s2, a0
+      4c: 03 35 09 00  	ld	a0, 0(s2)
+
+0000000000000050 <.Lpcrel_hi2>:
+      50: 97 09 00 00  	auipc	s3, 0
+
+0000000000000054 <.Lpcrel_hi3>:
+      54: 17 0a 00 00  	auipc	s4, 0
+      58: 63 e7 a4 02  	bltu	s1, a0, 0x86 <.Lpcrel_hi3+0x32>
+      5c: 03 46 0a 00  	lbu	a2, 0(s4)
+      60: 83 c6 09 00  	lbu	a3, 0(s3)
+      64: 85 45        	li	a1, 1
+      66: 09 c6        	beqz	a2, 0x70 <.Lpcrel_hi3+0x1c>
+      68: 13 96 e5 02  	slli	a2, a1, 46
+      6c: 89 e6        	bnez	a3, 0x76 <.Lpcrel_hi3+0x22>
+      6e: 31 a0        	j	0x7a <.Lpcrel_hi3+0x26>
+      70: 13 96 55 02  	slli	a2, a1, 37
+      74: 99 c2        	beqz	a3, 0x7a <.Lpcrel_hi3+0x26>
+      76: 13 96 75 03  	slli	a2, a1, 55
+      7a: 32 95        	add	a0, a0, a2
+      7c: 63 f5 a4 00  	bgeu	s1, a0, 0x86 <.Lpcrel_hi3+0x32>
+      80: 13 05 89 02  	addi	a0, s2, 40
+      84: 19 a0        	j	0x8a <.Lpcrel_hi3+0x36>
+      86: 13 05 09 03  	addi	a0, s2, 48
+      8a: 08 61        	ld	a0, 0(a0)
+      8c: 33 86 a4 40  	sub	a2, s1, a0
+
+0000000000000090 <.Lpcrel_hi4>:
+      90: 17 05 00 00  	auipc	a0, 0
+      94: 13 05 05 00  	mv	a0, a0
+      98: a6 85        	mv	a1, s1
+      9a: 97 00 00 00  	auipc	ra, 0
+      9e: e7 80 00 00  	jalr	ra
+      a2: 13 05 f0 06  	li	a0, 111
+      a6: 88 c0        	sw	a0, 0(s1)
+
+00000000000000a8 <.Lpcrel_hi5>:
+      a8: 17 05 00 00  	auipc	a0, 0
+      ac: 13 05 05 00  	mv	a0, a0
+      b0: 97 00 00 00  	auipc	ra, 0
+      b4: e7 80 00 00  	jalr	ra
+      b8: 90 40        	lw	a2, 0(s1)
+
+00000000000000ba <.Lpcrel_hi6>:
+      ba: 17 05 00 00  	auipc	a0, 0
+      be: 13 05 05 00  	mv	a0, a0
+      c2: a6 85        	mv	a1, s1
+      c4: 97 00 00 00  	auipc	ra, 0
+      c8: e7 80 00 00  	jalr	ra
+      cc: 03 35 09 00  	ld	a0, 0(s2)
+      d0: 63 e7 a4 02  	bltu	s1, a0, 0xfe <.Lpcrel_hi6+0x44>
+      d4: 03 46 0a 00  	lbu	a2, 0(s4)
+      d8: 83 c6 09 00  	lbu	a3, 0(s3)
+      dc: 85 45        	li	a1, 1
+      de: 09 c6        	beqz	a2, 0xe8 <.Lpcrel_hi6+0x2e>
+      e0: 13 96 e5 02  	slli	a2, a1, 46
+      e4: 89 e6        	bnez	a3, 0xee <.Lpcrel_hi6+0x34>
+      e6: 31 a0        	j	0xf2 <.Lpcrel_hi6+0x38>
+      e8: 13 96 55 02  	slli	a2, a1, 37
+      ec: 99 c2        	beqz	a3, 0xf2 <.Lpcrel_hi6+0x38>
+      ee: 13 96 75 03  	slli	a2, a1, 55
+      f2: 32 95        	add	a0, a0, a2
+      f4: 63 f5 a4 00  	bgeu	s1, a0, 0xfe <.Lpcrel_hi6+0x44>
+      f8: 13 05 89 02  	addi	a0, s2, 40
+      fc: 19 a0        	j	0x102 <.Lpcrel_hi7>
+      fe: 13 05 09 03  	addi	a0, s2, 48
+
+0000000000000102 <.Lpcrel_hi7>:
+     102: 97 05 00 00  	auipc	a1, 0
+     106: 83 b5 05 00  	ld	a1, 0(a1)
+     10a: 08 61        	ld	a0, 0(a0)
+     10c: a6 95        	add	a1, a1, s1
+     10e: 89 8d        	sub	a1, a1, a0
+     110: 37 09 04 00  	lui	s2, 64
+     114: 73 20 09 10  	csrs	sstatus, s2
+     118: 90 41        	lw	a2, 0(a1)
+
+000000000000011a <.Lpcrel_hi8>:
+     11a: 17 05 00 00  	auipc	a0, 0
+     11e: 13 05 05 00  	mv	a0, a0
+     122: 97 00 00 00  	auipc	ra, 0
+     126: e7 80 00 00  	jalr	ra
+     12a: 73 30 09 10  	csrc	sstatus, s2
+     12e: 37 05 00 10  	lui	a0, 65536
+     132: 73 46 05 68  	<unknown>
+
+0000000000000136 <.Lpcrel_hi9>:
+     136: 17 05 00 00  	auipc	a0, 0
+     13a: 13 05 05 00  	mv	a0, a0
+     13e: a6 85        	mv	a1, s1
+     140: 97 00 00 00  	auipc	ra, 0
+     144: e7 80 00 00  	jalr	ra
+     148: 8e 85        	mv	a1, gp
+
+000000000000014a <.Lpcrel_hi10>:
+     14a: 17 05 00 00  	auipc	a0, 0
+     14e: 13 05 05 00  	mv	a0, a0
+     152: 97 00 00 00  	auipc	ra, 0
+     156: e7 80 00 00  	jalr	ra
+     15a: 26 85        	mv	a0, s1
+     15c: 81 45        	li	a1, 0
+     15e: 97 00 00 00  	auipc	ra, 0
+     162: e7 80 00 00  	jalr	ra
+     166: a2 70        	ld	ra, 40(sp)
+     168: 02 74        	ld	s0, 32(sp)
+     16a: e2 64        	ld	s1, 24(sp)
+     16c: 42 69        	ld	s2, 16(sp)
+     16e: a2 69        	ld	s3, 8(sp)
+     170: 02 6a        	ld	s4, 0(sp)
+     172: 45 61        	addi	sp, sp, 48
+     174: 83 b0 81 ff  	ld	ra, -8(gp)
+     178: e1 11        	addi	gp, gp, -8
+     17a: 82 80        	ret
+
+000000000000017c <genesis_test>:
+     17c: a1 01        	addi	gp, gp, 8
+     17e: 23 bc 11 fe  	sd	ra, -8(gp)
+     182: 39 71        	addi	sp, sp, -64
+     184: 06 fc        	sd	ra, 56(sp)
+     186: 22 f8        	sd	s0, 48(sp)
+     188: 26 f4        	sd	s1, 40(sp)
+     18a: 4a f0        	sd	s2, 32(sp)
+     18c: 4e ec        	sd	s3, 24(sp)
+     18e: 52 e8        	sd	s4, 16(sp)
+     190: 56 e4        	sd	s5, 8(sp)
+     192: 80 00        	addi	s0, sp, 64
+
+0000000000000194 <.Lpcrel_hi11>:
+     194: 17 05 00 00  	auipc	a0, 0
+     198: 13 05 05 00  	mv	a0, a0
+     19c: 97 00 00 00  	auipc	ra, 0
+     1a0: e7 80 00 00  	jalr	ra
+
+00000000000001a4 <.Lpcrel_hi12>:
+     1a4: 17 05 00 00  	auipc	a0, 0
+     1a8: 13 05 05 00  	mv	a0, a0
+     1ac: 97 00 00 00  	auipc	ra, 0
+     1b0: e7 80 00 00  	jalr	ra
+     1b4: 05 65        	lui	a0, 1
+     1b6: 1b 05 05 cc  	addiw	a0, a0, -832
+     1ba: 81 45        	li	a1, 0
+     1bc: 97 00 00 00  	auipc	ra, 0
+     1c0: e7 80 00 00  	jalr	ra
+
+00000000000001c4 <.Lpcrel_hi13>:
+     1c4: 97 05 00 00  	auipc	a1, 0
+     1c8: 93 89 05 00  	mv	s3, a1
+     1cc: 83 b5 09 00  	ld	a1, 0(s3)
+     1d0: 2a 89        	mv	s2, a0
+
+00000000000001d2 <.Lpcrel_hi14>:
+     1d2: 17 0a 00 00  	auipc	s4, 0
+
+00000000000001d6 <.Lpcrel_hi15>:
+     1d6: 97 0a 00 00  	auipc	s5, 0
+     1da: 63 67 b5 02  	bltu	a0, a1, 0x208 <.Lpcrel_hi15+0x32>
+     1de: 03 c6 0a 00  	lbu	a2, 0(s5)
+     1e2: 83 46 0a 00  	lbu	a3, 0(s4)
+     1e6: 05 45        	li	a0, 1
+     1e8: 09 c6        	beqz	a2, 0x1f2 <.Lpcrel_hi15+0x1c>
+     1ea: 13 16 e5 02  	slli	a2, a0, 46
+     1ee: 89 e6        	bnez	a3, 0x1f8 <.Lpcrel_hi15+0x22>
+     1f0: 31 a0        	j	0x1fc <.Lpcrel_hi15+0x26>
+     1f2: 13 16 55 02  	slli	a2, a0, 37
+     1f6: 99 c2        	beqz	a3, 0x1fc <.Lpcrel_hi15+0x26>
+     1f8: 13 16 75 03  	slli	a2, a0, 55
+     1fc: b2 95        	add	a1, a1, a2
+     1fe: 63 75 b9 00  	bgeu	s2, a1, 0x208 <.Lpcrel_hi15+0x32>
+     202: 13 85 89 02  	addi	a0, s3, 40
+     206: 19 a0        	j	0x20c <.Lpcrel_hi15+0x36>
+     208: 13 85 09 03  	addi	a0, s3, 48
+     20c: 08 61        	ld	a0, 0(a0)
+     20e: 33 06 a9 40  	sub	a2, s2, a0
+
+0000000000000212 <.Lpcrel_hi16>:
+     212: 17 05 00 00  	auipc	a0, 0
+     216: 13 05 05 00  	mv	a0, a0
+     21a: ca 85        	mv	a1, s2
+     21c: 97 00 00 00  	auipc	ra, 0
+     220: e7 80 00 00  	jalr	ra
+     224: 05 65        	lui	a0, 1
+     226: 1b 05 05 cc  	addiw	a0, a0, -832
+     22a: 81 45        	li	a1, 0
+     22c: 97 00 00 00  	auipc	ra, 0
+     230: e7 80 00 00  	jalr	ra
+     234: 83 b5 09 00  	ld	a1, 0(s3)
+     238: aa 84        	mv	s1, a0
+     23a: 63 67 b5 02  	bltu	a0, a1, 0x268 <.Lpcrel_hi16+0x56>
+     23e: 03 c6 0a 00  	lbu	a2, 0(s5)
+     242: 83 46 0a 00  	lbu	a3, 0(s4)
+     246: 05 45        	li	a0, 1
+     248: 09 c6        	beqz	a2, 0x252 <.Lpcrel_hi16+0x40>
+     24a: 13 16 e5 02  	slli	a2, a0, 46
+     24e: 89 e6        	bnez	a3, 0x258 <.Lpcrel_hi16+0x46>
+     250: 31 a0        	j	0x25c <.Lpcrel_hi16+0x4a>
+     252: 13 16 55 02  	slli	a2, a0, 37
+     256: 99 c2        	beqz	a3, 0x25c <.Lpcrel_hi16+0x4a>
+     258: 13 16 75 03  	slli	a2, a0, 55
+     25c: b2 95        	add	a1, a1, a2
+     25e: 63 f5 b4 00  	bgeu	s1, a1, 0x268 <.Lpcrel_hi16+0x56>
+     262: 13 85 89 02  	addi	a0, s3, 40
+     266: 19 a0        	j	0x26c <.Lpcrel_hi16+0x5a>
+     268: 13 85 09 03  	addi	a0, s3, 48
+     26c: 08 61        	ld	a0, 0(a0)
+     26e: 33 86 a4 40  	sub	a2, s1, a0
+
+0000000000000272 <.Lpcrel_hi17>:
+     272: 17 05 00 00  	auipc	a0, 0
+     276: 13 05 05 00  	mv	a0, a0
+     27a: a6 85        	mv	a1, s1
+     27c: 97 00 00 00  	auipc	ra, 0
+     280: e7 80 00 00  	jalr	ra
+     284: 4a 85        	mv	a0, s2
+     286: 81 45        	li	a1, 0
+     288: 97 00 00 00  	auipc	ra, 0
+     28c: e7 80 00 00  	jalr	ra
+     290: 26 85        	mv	a0, s1
+     292: 81 45        	li	a1, 0
+     294: 97 00 00 00  	auipc	ra, 0
+     298: e7 80 00 00  	jalr	ra
+     29c: 37 05 00 02  	lui	a0, 8192
+     2a0: 81 45        	li	a1, 0
+     2a2: 97 00 00 00  	auipc	ra, 0
+     2a6: e7 80 00 00  	jalr	ra
+     2aa: 83 b5 09 00  	ld	a1, 0(s3)
+     2ae: 2a 89        	mv	s2, a0
+     2b0: 63 67 b5 02  	bltu	a0, a1, 0x2de <.Lpcrel_hi17+0x6c>
+     2b4: 03 c6 0a 00  	lbu	a2, 0(s5)
+     2b8: 83 46 0a 00  	lbu	a3, 0(s4)
+     2bc: 05 45        	li	a0, 1
+     2be: 09 c6        	beqz	a2, 0x2c8 <.Lpcrel_hi17+0x56>
+     2c0: 13 16 e5 02  	slli	a2, a0, 46
+     2c4: 89 e6        	bnez	a3, 0x2ce <.Lpcrel_hi17+0x5c>
+     2c6: 31 a0        	j	0x2d2 <.Lpcrel_hi17+0x60>
+     2c8: 13 16 55 02  	slli	a2, a0, 37
+     2cc: 99 c2        	beqz	a3, 0x2d2 <.Lpcrel_hi17+0x60>
+     2ce: 13 16 75 03  	slli	a2, a0, 55
+     2d2: b2 95        	add	a1, a1, a2
+     2d4: 63 75 b9 00  	bgeu	s2, a1, 0x2de <.Lpcrel_hi17+0x6c>
+     2d8: 13 85 89 02  	addi	a0, s3, 40
+     2dc: 19 a0        	j	0x2e2 <.Lpcrel_hi17+0x70>
+     2de: 13 85 09 03  	addi	a0, s3, 48
+     2e2: 08 61        	ld	a0, 0(a0)
+     2e4: 33 06 a9 40  	sub	a2, s2, a0
+
+00000000000002e8 <.Lpcrel_hi18>:
+     2e8: 17 05 00 00  	auipc	a0, 0
+     2ec: 13 05 05 00  	mv	a0, a0
+     2f0: ca 85        	mv	a1, s2
+     2f2: 97 00 00 00  	auipc	ra, 0
+     2f6: e7 80 00 00  	jalr	ra
+
+00000000000002fa <.Lpcrel_hi19>:
+     2fa: 17 05 00 00  	auipc	a0, 0
+     2fe: 13 05 05 00  	mv	a0, a0
+     302: 97 00 00 00  	auipc	ra, 0
+     306: e7 80 00 00  	jalr	ra
+     30a: 03 b5 09 00  	ld	a0, 0(s3)
+     30e: 63 67 a9 02  	bltu	s2, a0, 0x33c <.Lpcrel_hi19+0x42>
+     312: 03 c6 0a 00  	lbu	a2, 0(s5)
+     316: 83 46 0a 00  	lbu	a3, 0(s4)
+     31a: 85 45        	li	a1, 1
+     31c: 09 c6        	beqz	a2, 0x326 <.Lpcrel_hi19+0x2c>
+     31e: 13 96 e5 02  	slli	a2, a1, 46
+     322: 89 e6        	bnez	a3, 0x32c <.Lpcrel_hi19+0x32>
+     324: 31 a0        	j	0x330 <.Lpcrel_hi19+0x36>
+     326: 13 96 55 02  	slli	a2, a1, 37
+     32a: 99 c2        	beqz	a3, 0x330 <.Lpcrel_hi19+0x36>
+     32c: 13 96 75 03  	slli	a2, a1, 55
+     330: 32 95        	add	a0, a0, a2
+     332: 63 75 a9 00  	bgeu	s2, a0, 0x33c <.Lpcrel_hi19+0x42>
+     336: 13 85 89 02  	addi	a0, s3, 40
+     33a: 19 a0        	j	0x340 <.Lpcrel_hi20>
+     33c: 13 85 09 03  	addi	a0, s3, 48
+
+0000000000000340 <.Lpcrel_hi20>:
+     340: 97 04 00 00  	auipc	s1, 0
+     344: 83 b5 04 00  	ld	a1, 0(s1)
+     348: 08 61        	ld	a0, 0(a0)
+     34a: ca 95        	add	a1, a1, s2
+     34c: 33 86 a5 40  	sub	a2, a1, a0
+
+0000000000000350 <.Lpcrel_hi21>:
+     350: 17 05 00 00  	auipc	a0, 0
+     354: 13 05 05 00  	mv	a0, a0
+     358: ca 85        	mv	a1, s2
+     35a: 97 00 00 00  	auipc	ra, 0
+     35e: e7 80 00 00  	jalr	ra
+     362: 13 05 20 4d  	li	a0, 1234
+     366: 23 20 a9 00  	sw	a0, 0(s2)
+     36a: 03 b5 09 00  	ld	a0, 0(s3)
+     36e: 63 67 a9 02  	bltu	s2, a0, 0x39c <.Lpcrel_hi21+0x4c>
+     372: 03 c6 0a 00  	lbu	a2, 0(s5)
+     376: 83 46 0a 00  	lbu	a3, 0(s4)
+     37a: 85 45        	li	a1, 1
+     37c: 09 c6        	beqz	a2, 0x386 <.Lpcrel_hi21+0x36>
+     37e: 13 96 e5 02  	slli	a2, a1, 46
+     382: 89 e6        	bnez	a3, 0x38c <.Lpcrel_hi21+0x3c>
+     384: 31 a0        	j	0x390 <.Lpcrel_hi21+0x40>
+     386: 13 96 55 02  	slli	a2, a1, 37
+     38a: 99 c2        	beqz	a3, 0x390 <.Lpcrel_hi21+0x40>
+     38c: 13 96 75 03  	slli	a2, a1, 55
+     390: 32 95        	add	a0, a0, a2
+     392: 63 75 a9 00  	bgeu	s2, a0, 0x39c <.Lpcrel_hi21+0x4c>
+     396: 13 85 89 02  	addi	a0, s3, 40
+     39a: 19 a0        	j	0x3a0 <.Lpcrel_hi21+0x50>
+     39c: 13 85 09 03  	addi	a0, s3, 48
+     3a0: 83 b5 04 00  	ld	a1, 0(s1)
+     3a4: 08 61        	ld	a0, 0(a0)
+     3a6: ca 95        	add	a1, a1, s2
+     3a8: b3 89 a5 40  	sub	s3, a1, a0
+     3ac: 37 0a 04 00  	lui	s4, 64
+     3b0: 73 20 0a 10  	csrs	sstatus, s4
+     3b4: 83 25 09 00  	lw	a1, 0(s2)
+     3b8: 03 a6 09 00  	lw	a2, 0(s3)
+
+00000000000003bc <.Lpcrel_hi22>:
+     3bc: 17 05 00 00  	auipc	a0, 0
+     3c0: 93 04 05 00  	mv	s1, a0
+     3c4: 26 85        	mv	a0, s1
+     3c6: 97 00 00 00  	auipc	ra, 0
+     3ca: e7 80 00 00  	jalr	ra
+     3ce: 0d 65        	lui	a0, 3
+     3d0: 1b 06 95 03  	addiw	a2, a0, 57
+     3d4: 23 a0 c9 00  	sw	a2, 0(s3)
+     3d8: 83 25 09 00  	lw	a1, 0(s2)
+     3dc: 26 85        	mv	a0, s1
+     3de: 97 00 00 00  	auipc	ra, 0
+     3e2: e7 80 00 00  	jalr	ra
+     3e6: 73 30 0a 10  	csrc	sstatus, s4
+     3ea: 4a 85        	mv	a0, s2
+     3ec: 81 45        	li	a1, 0
+     3ee: 97 00 00 00  	auipc	ra, 0
+     3f2: e7 80 00 00  	jalr	ra
+     3f6: 8e 85        	mv	a1, gp
+
+00000000000003f8 <.Lpcrel_hi23>:
+     3f8: 17 05 00 00  	auipc	a0, 0
+     3fc: 13 05 05 00  	mv	a0, a0
+     400: 97 00 00 00  	auipc	ra, 0
+     404: e7 80 00 00  	jalr	ra
+
+0000000000000408 <.Lpcrel_hi24>:
+     408: 17 05 00 00  	auipc	a0, 0
+     40c: 13 05 05 00  	mv	a0, a0
+     410: 97 00 00 00  	auipc	ra, 0
+     414: e7 80 00 00  	jalr	ra
+     418: e2 70        	ld	ra, 56(sp)
+     41a: 42 74        	ld	s0, 48(sp)
+     41c: a2 74        	ld	s1, 40(sp)
+     41e: 02 79        	ld	s2, 32(sp)
+     420: e2 69        	ld	s3, 24(sp)
+     422: 42 6a        	ld	s4, 16(sp)
+     424: a2 6a        	ld	s5, 8(sp)
+     426: 21 61        	addi	sp, sp, 64
+     428: 83 b0 81 ff  	ld	ra, -8(gp)
+     42c: e1 11        	addi	gp, gp, -8
+     42e: 82 80        	ret
+
+0000000000000430 <genesis_zone_set_readonly>:
+     430: a1 01        	addi	gp, gp, 8
+     432: 23 bc 11 fe  	sd	ra, -8(gp)
+     436: 01 11        	addi	sp, sp, -32
+     438: 06 ec        	sd	ra, 24(sp)
+     43a: 22 e8        	sd	s0, 16(sp)
+     43c: 26 e4        	sd	s1, 8(sp)
+     43e: 00 10        	addi	s0, sp, 32
+
+0000000000000440 <.Lpcrel_hi25>:
+     440: 17 05 00 00  	auipc	a0, 0
+     444: 03 35 05 00  	ld	a0, 0(a0)
+
+0000000000000448 <.Lpcrel_hi26>:
+     448: 97 05 00 00  	auipc	a1, 0
+     44c: 03 b6 05 00  	ld	a2, 0(a1)
+     450: 32 05        	slli	a0, a0, 12
+     452: 2a 96        	add	a2, a2, a0
+     454: b7 04 00 e0  	lui	s1, 917504
+     458: b2 94        	add	s1, s1, a2
+
+000000000000045a <.Lpcrel_hi27>:
+     45a: 17 05 00 00  	auipc	a0, 0
+     45e: 13 05 05 00  	mv	a0, a0
+     462: a6 85        	mv	a1, s1
+     464: 97 00 00 00  	auipc	ra, 0
+     468: e7 80 00 00  	jalr	ra
+     46c: b7 05 02 00  	lui	a1, 32
+     470: 26 85        	mv	a0, s1
+     472: 97 00 00 00  	auipc	ra, 0
+     476: e7 80 00 00  	jalr	ra
+     47a: 15 e1        	bnez	a0, 0x49e <.Lpcrel_hi28>
+     47c: 8e 85        	mv	a1, gp
+
+000000000000047e <.Lpcrel_hi29>:
+     47e: 17 05 00 00  	auipc	a0, 0
+     482: 13 05 05 00  	mv	a0, a0
+     486: 97 00 00 00  	auipc	ra, 0
+     48a: e7 80 00 00  	jalr	ra
+     48e: e2 60        	ld	ra, 24(sp)
+     490: 42 64        	ld	s0, 16(sp)
+     492: a2 64        	ld	s1, 8(sp)
+     494: 05 61        	addi	sp, sp, 32
+     496: 83 b0 81 ff  	ld	ra, -8(gp)
+     49a: e1 11        	addi	gp, gp, -8
+     49c: 82 80        	ret
+
+000000000000049e <.Lpcrel_hi28>:
+     49e: 17 05 00 00  	auipc	a0, 0
+     4a2: 13 05 05 00  	mv	a0, a0
+     4a6: 97 00 00 00  	auipc	ra, 0
+     4aa: e7 80 00 00  	jalr	ra
+
+00000000000004ae <genesis_init>:
+     4ae: a1 01        	addi	gp, gp, 8
+     4b0: 23 bc 11 fe  	sd	ra, -8(gp)
+     4b4: 41 11        	addi	sp, sp, -16
+     4b6: 06 e4        	sd	ra, 8(sp)
+     4b8: 22 e0        	sd	s0, 0(sp)
+     4ba: 00 08        	addi	s0, sp, 16
+
+00000000000004bc <.Lpcrel_hi30>:
+     4bc: 17 05 00 00  	auipc	a0, 0
+     4c0: 13 05 05 00  	mv	a0, a0
+
+00000000000004c4 <.Lpcrel_hi31>:
+     4c4: 97 05 00 00  	auipc	a1, 0
+     4c8: 93 85 05 00  	mv	a1, a1
+
+00000000000004cc <.Lpcrel_hi32>:
+     4cc: 17 06 00 00  	auipc	a2, 0
+     4d0: 13 06 06 00  	mv	a2, a2
+     4d4: 97 00 00 00  	auipc	ra, 0
+     4d8: e7 80 00 00  	jalr	ra
+     4dc: 8e 85        	mv	a1, gp
+
+00000000000004de <.Lpcrel_hi33>:
+     4de: 17 05 00 00  	auipc	a0, 0
+     4e2: 13 05 05 00  	mv	a0, a0
+     4e6: 97 00 00 00  	auipc	ra, 0
+     4ea: e7 80 00 00  	jalr	ra
+     4ee: 97 00 00 00  	auipc	ra, 0
+     4f2: e7 80 00 00  	jalr	ra
+
+00000000000004f6 <.Lpcrel_hi34>:
+     4f6: 17 05 00 00  	auipc	a0, 0
+     4fa: 85 45        	li	a1, 1
+     4fc: 23 20 b5 00  	sw	a1, 0(a0)
+     500: 97 00 00 00  	auipc	ra, 0
+     504: e7 80 e0 01  	jalr	30(ra)
+     508: 97 00 00 00  	auipc	ra, 0
+     50c: e7 80 00 00  	jalr	ra
+     510: a2 60        	ld	ra, 8(sp)
+     512: 02 64        	ld	s0, 0(sp)
+     514: 41 01        	addi	sp, sp, 16
+     516: 83 b0 81 ff  	ld	ra, -8(gp)
+     51a: e1 11        	addi	gp, gp, -8
+     51c: 82 80        	ret
+
+000000000000051e <sfk_mapping>:
+     51e: a1 01        	addi	gp, gp, 8
+     520: 23 bc 11 fe  	sd	ra, -8(gp)
+     524: 59 71        	addi	sp, sp, -112
+     526: 86 f4        	sd	ra, 104(sp)
+     528: a2 f0        	sd	s0, 96(sp)
+     52a: a6 ec        	sd	s1, 88(sp)
+     52c: ca e8        	sd	s2, 80(sp)
+     52e: ce e4        	sd	s3, 72(sp)
+     530: d2 e0        	sd	s4, 64(sp)
+     532: 56 fc        	sd	s5, 56(sp)
+     534: 5a f8        	sd	s6, 48(sp)
+     536: 5e f4        	sd	s7, 40(sp)
+     538: 62 f0        	sd	s8, 32(sp)
+     53a: 66 ec        	sd	s9, 24(sp)
+     53c: 6a e8        	sd	s10, 16(sp)
+     53e: 6e e4        	sd	s11, 8(sp)
+     540: 80 18        	addi	s0, sp, 112
+
+0000000000000542 <.Lpcrel_hi35>:
+     542: 17 05 00 00  	auipc	a0, 0
+     546: 13 05 05 00  	mv	a0, a0
+     54a: 97 00 00 00  	auipc	ra, 0
+     54e: e7 80 00 00  	jalr	ra
+     552: 37 05 00 02  	lui	a0, 8192
+     556: 1b 05 05 10  	addiw	a0, a0, 256
+     55a: 89 45        	li	a1, 2
+     55c: 01 46        	li	a2, 0
+     55e: 81 46        	li	a3, 0
+     560: 97 00 00 00  	auipc	ra, 0
+     564: e7 80 00 00  	jalr	ra
+     568: 2a 89        	mv	s2, a0
+
+000000000000056a <.Lpcrel_hi36>:
+     56a: 97 09 00 00  	auipc	s3, 0
+
+000000000000056e <.Lpcrel_hi37>:
+     56e: 17 0a 00 00  	auipc	s4, 0
+     572: 83 45 0a 00  	lbu	a1, 0(s4)
+     576: 03 c5 09 00  	lbu	a0, 0(s3)
+     57a: fd 5a        	li	s5, -1
+     57c: 13 9b 4a 02  	slli	s6, s5, 36
+     580: 13 9c da 02  	slli	s8, s5, 45
+     584: 5a 86        	mv	a2, s6
+     586: 91 c1        	beqz	a1, 0x58a <.Lpcrel_hi38>
+     588: 62 86        	mv	a2, s8
+
+000000000000058a <.Lpcrel_hi38>:
+     58a: 97 06 00 00  	auipc	a3, 0
+     58e: 93 84 06 00  	mv	s1, a3
+     592: 93 96 6a 03  	slli	a3, s5, 54
+     596: 23 38 d4 f8  	sd	a3, -112(s0)
+     59a: 19 c1        	beqz	a0, 0x5a0 <.Lpcrel_hi38+0x16>
+     59c: 03 36 04 f9  	ld	a2, -112(s0)
+     5a0: 98 60        	ld	a4, 0(s1)
+     5a2: 93 9c 0a 02  	slli	s9, s5, 32
+     5a6: 93 9b 9a 02  	slli	s7, s5, 41
+     5aa: e6 86        	mv	a3, s9
+     5ac: 91 c1        	beqz	a1, 0x5b0 <.Lpcrel_hi38+0x26>
+     5ae: de 86        	mv	a3, s7
+     5b0: 3a 96        	add	a2, a2, a4
+     5b2: 13 9d 2a 03  	slli	s10, s5, 50
+     5b6: 11 c1        	beqz	a0, 0x5ba <.Lpcrel_hi39>
+     5b8: ea 86        	mv	a3, s10
+
+00000000000005ba <.Lpcrel_hi39>:
+     5ba: 97 0d 00 00  	auipc	s11, 0
+     5be: 03 b5 0d 00  	ld	a0, 0(s11)
+     5c2: 36 96        	add	a2, a2, a3
+     5c4: 31 81        	srli	a0, a0, 12
+     5c6: 1a 05        	slli	a0, a0, 6
+     5c8: 8c 74        	ld	a1, 40(s1)
+     5ca: 11 8d        	sub	a0, a0, a2
+     5cc: 4a 95        	add	a0, a0, s2
+     5ce: 1a 05        	slli	a0, a0, 6
+     5d0: aa 95        	add	a1, a1, a0
+
+00000000000005d2 <.Lpcrel_hi40>:
+     5d2: 17 05 00 00  	auipc	a0, 0
+     5d6: 13 05 05 00  	mv	a0, a0
+     5da: 97 00 00 00  	auipc	ra, 0
+     5de: e7 80 00 00  	jalr	ra
+     5e2: 03 46 0a 00  	lbu	a2, 0(s4)
+     5e6: 03 c5 09 00  	lbu	a0, 0(s3)
+     5ea: da 85        	mv	a1, s6
+     5ec: 11 c2        	beqz	a2, 0x5f0 <.Lpcrel_hi40+0x1e>
+     5ee: e2 85        	mv	a1, s8
+     5f0: 19 c1        	beqz	a0, 0x5f6 <.Lpcrel_hi40+0x24>
+     5f2: 83 35 04 f9  	ld	a1, -112(s0)
+     5f6: 98 60        	ld	a4, 0(s1)
+     5f8: e6 86        	mv	a3, s9
+     5fa: 11 c2        	beqz	a2, 0x5fe <.Lpcrel_hi40+0x2c>
+     5fc: de 86        	mv	a3, s7
+     5fe: ba 95        	add	a1, a1, a4
+     600: 11 c1        	beqz	a0, 0x604 <.Lpcrel_hi40+0x32>
+     602: ea 86        	mv	a3, s10
+     604: 03 b5 0d 00  	ld	a0, 0(s11)
+     608: b6 95        	add	a1, a1, a3
+     60a: 31 81        	srli	a0, a0, 12
+     60c: 1a 05        	slli	a0, a0, 6
+     60e: 0d 8d        	sub	a0, a0, a1
+     610: 4a 95        	add	a0, a0, s2
+     612: 93 15 65 00  	slli	a1, a0, 6
+
+0000000000000616 <.Lpcrel_hi41>:
+     616: 17 05 00 00  	auipc	a0, 0
+     61a: 13 05 05 00  	mv	a0, a0
+     61e: 97 00 00 00  	auipc	ra, 0
+     622: e7 80 00 00  	jalr	ra
+
+0000000000000626 <.Lpcrel_hi42>:
+     626: 17 05 00 00  	auipc	a0, 0
+     62a: 13 05 05 00  	mv	a0, a0
+     62e: 97 00 00 00  	auipc	ra, 0
+     632: e7 80 00 00  	jalr	ra
+     636: 83 45 0a 00  	lbu	a1, 0(s4)
+     63a: 03 c5 09 00  	lbu	a0, 0(s3)
+     63e: 99 c1        	beqz	a1, 0x644 <.Lpcrel_hi42+0x1e>
+     640: 62 8b        	mv	s6, s8
+     642: de 8c        	mv	s9, s7
+     644: 8c 60        	ld	a1, 0(s1)
+     646: 19 c1        	beqz	a0, 0x64c <.Lpcrel_hi42+0x26>
+     648: 03 3b 04 f9  	ld	s6, -112(s0)
+     64c: 2e 9b        	add	s6, s6, a1
+     64e: 11 c1        	beqz	a0, 0x652 <.Lpcrel_hi42+0x2c>
+     650: ea 8c        	mv	s9, s10
+     652: 03 b5 0d 00  	ld	a0, 0(s11)
+     656: 66 9b        	add	s6, s6, s9
+     658: 31 81        	srli	a0, a0, 12
+     65a: 1a 05        	slli	a0, a0, 6
+     65c: 33 05 65 41  	sub	a0, a0, s6
+     660: 4a 95        	add	a0, a0, s2
+     662: 3a 05        	slli	a0, a0, 14
+     664: 51 81        	srli	a0, a0, 20
+     666: fe 1a        	slli	s5, s5, 63
+     668: 33 65 55 01  	or	a0, a0, s5
+     66c: 73 10 05 68  	csrw	hgatp, a0
+     670: f3 25 00 68  	csrr	a1, hgatp
+
+0000000000000674 <.Lpcrel_hi43>:
+     674: 17 05 00 00  	auipc	a0, 0
+     678: 13 05 05 00  	mv	a0, a0
+     67c: 97 00 00 00  	auipc	ra, 0
+     680: e7 80 00 00  	jalr	ra
+
+0000000000000684 <.Lpcrel_hi44>:
+     684: 17 05 00 00  	auipc	a0, 0
+     688: 13 05 05 00  	mv	a0, a0
+     68c: 97 00 00 00  	auipc	ra, 0
+     690: e7 80 00 00  	jalr	ra
+     694: 73 25 00 68  	csrr	a0, hgatp
+     698: 8c 74        	ld	a1, 40(s1)
+     69a: 32 15        	slli	a0, a0, 44
+     69c: 01 91        	srli	a0, a0, 32
+     69e: 2e 95        	add	a0, a0, a1
+     6a0: 0d 46        	li	a2, 3
+     6a2: 7a 06        	slli	a2, a2, 30
+     6a4: b7 05 00 40  	lui	a1, 262144
+     6a8: b7 06 20 00  	lui	a3, 512
+     6ac: 13 07 70 0d  	li	a4, 215
+     6b0: 97 00 00 00  	auipc	ra, 0
+     6b4: e7 80 00 00  	jalr	ra
+     6b8: 73 25 00 68  	csrr	a0, hgatp
+     6bc: 90 60        	ld	a2, 0(s1)
+     6be: 8c 74        	ld	a1, 40(s1)
+     6c0: b7 d6 60 81  	lui	a3, 529933
+     6c4: 63 e7 c6 02  	bltu	a3, a2, 0x6f2 <.Lpcrel_hi44+0x6e>
+     6c8: 03 47 0a 00  	lbu	a4, 0(s4)
+     6cc: 83 c7 09 00  	lbu	a5, 0(s3)
+     6d0: 85 46        	li	a3, 1
+     6d2: 09 c7        	beqz	a4, 0x6dc <.Lpcrel_hi44+0x58>
+     6d4: 13 97 e6 02  	slli	a4, a3, 46
+     6d8: 89 e7        	bnez	a5, 0x6e2 <.Lpcrel_hi44+0x5e>
+     6da: 31 a0        	j	0x6e6 <.Lpcrel_hi44+0x62>
+     6dc: 13 97 56 02  	slli	a4, a3, 37
+     6e0: 99 c3        	beqz	a5, 0x6e6 <.Lpcrel_hi44+0x62>
+     6e2: 13 97 76 03  	slli	a4, a3, 55
+     6e6: 32 97        	add	a4, a4, a2
+     6e8: b7 d6 60 81  	lui	a3, 529933
+     6ec: 2e 86        	mv	a2, a1
+     6ee: 63 e3 e6 00  	bltu	a3, a4, 0x6f4 <.Lpcrel_hi44+0x70>
+     6f2: 90 78        	ld	a2, 48(s1)
+     6f4: 32 15        	slli	a0, a0, 44
+     6f6: 01 91        	srli	a0, a0, 32
+     6f8: 2e 95        	add	a0, a0, a1
+     6fa: b7 d5 60 81  	lui	a1, 529933
+     6fe: 33 86 c5 40  	sub	a2, a1, a2
+     702: b7 15 08 00  	lui	a1, 129
+     706: 9b 85 d5 60  	addiw	a1, a1, 1549
+     70a: b2 05        	slli	a1, a1, 12
+     70c: 85 66        	lui	a3, 1
+     70e: 13 07 70 0d  	li	a4, 215
+     712: 97 00 00 00  	auipc	ra, 0
+     716: e7 80 00 00  	jalr	ra
+     71a: 8e 85        	mv	a1, gp
+
+000000000000071c <.Lpcrel_hi45>:
+     71c: 17 05 00 00  	auipc	a0, 0
+     720: 13 05 05 00  	mv	a0, a0
+     724: 97 00 00 00  	auipc	ra, 0
+     728: e7 80 00 00  	jalr	ra
+
+000000000000072c <.Lpcrel_hi46>:
+     72c: 17 05 00 00  	auipc	a0, 0
+     730: 13 05 05 00  	mv	a0, a0
+     734: 97 00 00 00  	auipc	ra, 0
+     738: e7 80 00 00  	jalr	ra
+     73c: 73 00 00 12  	sfence.vma
+     740: a6 70        	ld	ra, 104(sp)
+     742: 06 74        	ld	s0, 96(sp)
+     744: e6 64        	ld	s1, 88(sp)
+     746: 46 69        	ld	s2, 80(sp)
+     748: a6 69        	ld	s3, 72(sp)
+     74a: 06 6a        	ld	s4, 64(sp)
+     74c: e2 7a        	ld	s5, 56(sp)
+     74e: 42 7b        	ld	s6, 48(sp)
+     750: a2 7b        	ld	s7, 40(sp)
+     752: 02 7c        	ld	s8, 32(sp)
+     754: e2 6c        	ld	s9, 24(sp)
+     756: 42 6d        	ld	s10, 16(sp)
+     758: a2 6d        	ld	s11, 8(sp)
+     75a: 65 61        	addi	sp, sp, 112
+     75c: 83 b0 81 ff  	ld	ra, -8(gp)
+     760: e1 11        	addi	gp, gp, -8
+     762: 82 80        	ret

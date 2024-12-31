@@ -16,6 +16,22 @@ extern unsigned long __genesis_asm_copy_user(unsigned long arg0,
 extern unsigned long  __genesis_clear_user(unsigned long arg0,
 					   unsigned long arg1);
 
+void _genesis_shadow_call(unsigned long* gp, unsigned long ra)
+{
+	*gp = ra;
+}
+
+void _genesis_shadow_back(unsigned long* gp)
+{
+/*
+    asm volatile (
+        "ld ra, 0(%0)"
+	:
+	: "r" (gp)
+    );
+*/
+}
+
 /* PAGE TABLE OPERATIONS */
 static inline void _genesis_set_pgd(pgd_t *pgdp, pgd_t pgd)
 {
@@ -157,6 +173,12 @@ unsigned long __genesis inner_handler(unsigned long svc_num,
 		break;
 	case SFK_WRITE_HGATP:
 		_sfk_write_hgatp(arg0);
+		break;
+	case GENESIS_SHADOW_CALL:
+		_genesis_shadow_call((unsigned long*)arg0, arg1);
+		break;
+	case GENESIS_SHADOW_BACK:
+		_genesis_shadow_back((unsigned long*)arg0);
 		break;
 	case GENESIS_WRITE_CSR:
 		_genesis_write_csr(arg0);
