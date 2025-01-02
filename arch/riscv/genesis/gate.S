@@ -4,6 +4,7 @@
 #include <asm/asm.h>
 #include <asm/asm-offsets.h>
 #include <asm/csr.h>
+#include <asm/genesis.h>
 
 /* GENESIS Entry Gate
  * The 't6' register is caller-saved register.
@@ -18,7 +19,19 @@ ENTRY(_genesis_entry)
 	csrc CSR_STATUS, SR_IE	// Turn off interrupt
 	li t6, SR_SUM		// Load SUM immediate value
 	csrs CSR_STATUS, t6	// Set the SUM bit (Disable SUM)
+	la t1, genesis_enabled
+	lw t2, 0(t1)
+	li t3, 1
+	beq t2, t3, call
+	li t0, 20
+	beq a0, t0, shadow
+call:
 	call inner_handler	// Jump to the inner domain
+	j end
+shadow:
+	sd a1, -8(gp)
+	j end
+end:
 ENDPROC(_genesis_entry)
 ENDPROC(_genesis_uaccess_entry)
 EXPORT_SYMBOL(_genesis_entry)

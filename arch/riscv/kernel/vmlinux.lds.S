@@ -30,7 +30,7 @@ jiffies = jiffies_64;
 PECOFF_SECTION_ALIGNMENT = 0x1000;
 PECOFF_FILE_ALIGNMENT = 0x200;
 
-#ifdef CONFIG_GENESIS
+//#ifdef CONFIG_GENESIS
 #define PRIVINST_TEXT                   \
         . = ALIGN(SECTION_ALIGN);       \
         __privinst_begin = .;           \
@@ -44,10 +44,10 @@ PECOFF_FILE_ALIGNMENT = 0x200;
         *(.genesis.text)                \
         __genesis_text_end = .;
 
-#else
-#define PRIVINST_TEXT
-#define GENESIS_TEXT
-#endif
+//#else
+//#define PRIVINST_TEXT
+//#define GENESIS_TEXT
+//#endif
 
 SECTIONS
 {

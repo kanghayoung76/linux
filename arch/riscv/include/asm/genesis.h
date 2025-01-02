@@ -28,6 +28,7 @@
 #define GENESIS_INIT_PMD	17 // Init PMD
 #define GENESIS_INIT_PTE	18 // Init PTE
 #define GENESIS_WRITE_TVEC	19 // Set STVEC
+#define GENESIS_SHADOW_PROL	20
 
 #ifndef __ASSEMBLY__
 

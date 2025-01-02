@@ -24,7 +24,8 @@
                 REG_L   t0, (SUSPEND_CONTEXT_REGS + PT_EPC)(a0)
                 csrw    CSR_EPC, t0
                 REG_L   t0, (SUSPEND_CONTEXT_REGS + PT_STATUS)(a0)
-                .if CONFIG_GENESIS
+//                .if CONFIG_GENESIS
+#ifdef CONFIG_GENESIS
                         addi sp, sp, -SZREG
                         REG_S a0, (sp)
                         li a0, GENESIS_WRITE_CSR
@@ -32,9 +33,11 @@
                         call _genesis_entry
                         REG_L a0, (sp)
                         addi sp, sp, SZREG
-                .else
+//                .else
+#else
                         csrw    CSR_STATUS, t0
-                .endif
+//                .endif
+#endif
                 REG_L   t0, (SUSPEND_CONTEXT_REGS + PT_BADADDR)(a0)
                 csrw    CSR_TVAL, t0
                 REG_L   t0, (SUSPEND_CONTEXT_REGS + PT_CAUSE)(a0)
