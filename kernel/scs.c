@@ -12,6 +12,7 @@
 #include <linux/vmalloc.h>
 #include <linux/vmstat.h>
 
+
 #ifdef CONFIG_DYNAMIC_SCS
 DEFINE_STATIC_KEY_FALSE(dynamic_scs_enabled);
 #endif
@@ -42,12 +43,12 @@ static void *__scs_alloc(int node)
 			goto out;
 		}
 	}
-#endif
-
 	s = __vmalloc_node_range(SCS_SIZE, 1, VMALLOC_START, VMALLOC_END,
-				    __GFP_GENESIS, PAGE_KERNEL, 0, node,
+				    GFP_SCS, PAGE_KERNEL, 0, node,
 				    __builtin_return_address(0));
-	//printk("scs alloc address : 0x%lx",s);
+#endif
+	s = (void *)__get_free_page(__GFP_GENESIS);
+//	printk("scs alloc address : 0x%lx",s);
 
 out:
 	return kasan_reset_tag(s);
@@ -90,7 +91,8 @@ void scs_free(void *s)
 #endif
 
 	kasan_unpoison_vmalloc(s, SCS_SIZE, KASAN_VMALLOC_PROT_NORMAL);
-	vfree_atomic(s);
+	//vfree_atomic(s);
+	free_page((unsigned long)s);
 }
 
 static int scs_cleanup(unsigned int cpu)

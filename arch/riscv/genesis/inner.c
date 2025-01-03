@@ -15,6 +15,17 @@ extern unsigned long __genesis_asm_copy_user(unsigned long arg0,
 extern unsigned long  __genesis_clear_user(unsigned long arg0,
 					   unsigned long arg1);
 
+void custom_memcpy(void *dest, const void *src, unsigned long size) {
+      unsigned char *d = (unsigned char *)dest;
+      const unsigned char *s = (const unsigned char *)src;
+      while (size--) *d++ = *s++;
+}
+
+void custom_memset(void *ptr, unsigned char value, unsigned long size) {
+      unsigned char *byte_ptr = (unsigned char *)ptr;
+      while (size--) *byte_ptr++ = value;
+}
+
 void _genesis_shadow_prol(unsigned long ra)
 {
 /*
@@ -143,9 +154,13 @@ static void __genesis __genesis_init_pgd(pgd_t *pgdp)
 	else
 		spgdp = pgdp;
 
-	memset(spgdp, 0, USER_PTRS_PER_PGD * sizeof(pgd_t));
+//	memset(spgdp, 0, USER_PTRS_PER_PGD * sizeof(pgd_t));
+	custom_memset(spgdp, 0, USER_PTRS_PER_PGD * sizeof(pgd_t));
 	/* Copy kernel mappings */
-	memcpy(spgdp + USER_PTRS_PER_PGD,
+//	memcpy(spgdp + USER_PTRS_PER_PGD,
+//	       init_mm.pgd + USER_PTRS_PER_PGD,
+//	       (PTRS_PER_PGD - USER_PTRS_PER_PGD) * sizeof(pgd_t));
+	custom_memcpy(spgdp + USER_PTRS_PER_PGD,
 	       init_mm.pgd + USER_PTRS_PER_PGD,
 	       (PTRS_PER_PGD - USER_PTRS_PER_PGD) * sizeof(pgd_t));
 }
@@ -160,7 +175,8 @@ static void __genesis __genesis_init_pgtbl(void *pgtbl)
 	else
 		shadow_pgtbl = pgtbl;
 
-	memset(shadow_pgtbl, 0, PAGE_SIZE);
+//	memset(shadow_pgtbl, 0, PAGE_SIZE);
+	custom_memset(shadow_pgtbl, 0, PAGE_SIZE);
 }
 
 unsigned long __genesis inner_handler(unsigned long svc_num,
