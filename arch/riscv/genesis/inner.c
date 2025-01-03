@@ -17,14 +17,23 @@ extern unsigned long  __genesis_clear_user(unsigned long arg0,
 
 void _genesis_shadow_prol(unsigned long ra)
 {
-//	if(likely(genesis_enabled))
+/*
+        unsigned long gp;
+
+        asm volatile (
+                    "mv %0, gp"
+                    :
+                    : "r" (gp)
+        );
+	
 	gp = __virt_to_shadow(gp);
 
         asm volatile (
-                    "sd %0, -16(gp)"
-                    :
-                    : "r" (ra)
+                    "sd %0, -16(%1)"
+		    : 
+                    : "r" (ra), "r" (gp)
         );
+*/
 }
 
 /* PAGE TABLE OPERATIONS */

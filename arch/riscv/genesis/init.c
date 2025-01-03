@@ -94,6 +94,12 @@ void __init genesis_init(void)
 	set_kernel_memory(__privinst_begin, __privinst_end,
 			  set_memory_u_x);
 #endif
+	unsigned long gp;
+	asm volatile (
+		"mv %0, gp"
+		: "=r" (gp)
+	);
+	printk("------------init task gp : 0x%lx\n", gp);
 
 	genesis_enabled = 1;
 
