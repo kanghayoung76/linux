@@ -46,9 +46,10 @@ static void *__scs_alloc(int node)
 	s = __vmalloc_node_range(SCS_SIZE, 1, VMALLOC_START, VMALLOC_END,
 				    GFP_SCS, PAGE_KERNEL, 0, node,
 				    __builtin_return_address(0));
-#endif
+#else
 	s = (void *)__get_free_page(__GFP_GENESIS);
 //	printk("scs alloc address : 0x%lx",s);
+#endif
 
 out:
 	return kasan_reset_tag(s);
@@ -91,8 +92,11 @@ void scs_free(void *s)
 #endif
 
 	kasan_unpoison_vmalloc(s, SCS_SIZE, KASAN_VMALLOC_PROT_NORMAL);
-	//vfree_atomic(s);
+#ifndef CONFIG_GENESIS
+	vfree_atomic(s);
+#else
 	free_page((unsigned long)s);
+#endif
 }
 
 static int scs_cleanup(unsigned int cpu)
