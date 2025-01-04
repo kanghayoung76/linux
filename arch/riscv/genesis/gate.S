@@ -19,18 +19,15 @@ ENTRY(_genesis_entry)
 	csrc CSR_STATUS, SR_IE	// Turn off interrupt
 	li t6, SR_SUM		// Load SUM immediate value
 	csrs CSR_STATUS, t6	// Set the SUM bit (Disable SUM)
-	la t5, genesis_enabled
-	lw t5, 0(t5)
-	addi t5, t5, -1
-	beq t5, zero, call
-	li t5, 20
-	beq a0, t5, shadow
-call:
-	call inner_handler	// Jump to the inner domain
-	j end
-shadow:
+	li t6, 20
+	bne a0, t6, call
+	li t6, 0x100000000
+	and t6, gp, t6
+	beq t6, zero, call
 	sd a1, -8(gp)
 	j end
+call:
+	call inner_handler	// Jump to the inner domain
 end:
 ENDPROC(_genesis_entry)
 ENDPROC(_genesis_uaccess_entry)

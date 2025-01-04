@@ -26,17 +26,22 @@ void custom_memset(void *ptr, unsigned char value, unsigned long size) {
       while (size--) *byte_ptr++ = value;
 }
 
-void _genesis_shadow_prol(unsigned long ra)
+static inline void _genesis_shadow_prol(unsigned long ra)
 {
-/*
-        unsigned long gp;
+        asm volatile (
+                    "sd %0, -16(gp)"
+                    :
+                    : "r" (ra)
+        );
 
+        unsigned long gp;
         asm volatile (
                     "mv %0, gp"
-                    :
-                    : "r" (gp)
+                    : "=r" (gp)
         );
+	printk("gp : 0x%lx\n", gp);
 	
+/*
 	gp = __virt_to_shadow(gp);
 
         asm volatile (
