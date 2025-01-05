@@ -23,7 +23,7 @@ ENTRY(_genesis_entry)
 	bne a0, t6, call
 	li t6, 0x2000000000
 	and t6, gp, t6
-//	beq t6, zero, call
+	beq t6, zero, call
 	sd a1, -8(gp)
 	j end
 call:

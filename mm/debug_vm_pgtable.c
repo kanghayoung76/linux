@@ -444,7 +444,7 @@ static void __init pmd_huge_tests(struct pgtable_debug_args *args)
 	WRITE_ONCE(*args->pmdp, __pmd(0));
 #else
 	_genesis_entry(/*svc_num*/ GENESIS_SET_PMD,
-		       /*arg0*/ (unsigned long)args->pmdp,
+		       /*arg0*/ (unsigned long)&(*args->pmdp),
 		       /*arg1*/ pmd_val(__pmd(0)));
 #endif
 	WARN_ON(!pmd_set_huge(args->pmdp, __pfn_to_phys(args->fixed_pmd_pfn), args->page_prot));
