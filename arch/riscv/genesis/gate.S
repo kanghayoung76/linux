@@ -21,9 +21,9 @@ ENTRY(_genesis_entry)
 	csrs CSR_STATUS, t6	// Set the SUM bit (Disable SUM)
 	li t6, 20
 	bne a0, t6, call
-	li t6, 0x100000000
+	li t6, 0x2000000000
 	and t6, gp, t6
-//	beq t6, zero, call
+	beq t6, zero, call
 	sd a1, -8(gp)
 	j end
 call:

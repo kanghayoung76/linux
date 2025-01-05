@@ -1309,11 +1309,19 @@ static int __init debug_vm_pgtable(void)
 	int idx, ret;
 
         unsigned long gp;
+        unsigned long t5;
         asm volatile (
                 "mv %0, gp"
                 : "=r" (gp)
         );
+	
+        asm volatile (
+                "mv %0, t5"
+                : "=r" (t5)
+        );
+
         printk("------------scs gp : 0x%lx\n", gp);
+        printk("------------scs t5 : 0x%lx\n", t5);
 
 
 	pr_info("Validating architecture page table helpers\n");
