@@ -1,7 +1,6 @@
 #include <linux/init.h>
 #include <linux/gfp.h>
 #include <linux/memblock.h>
-#include <asm/io.h>
 
 #include <asm/genesis.h>
 #include <asm/vmlinux.lds.h>

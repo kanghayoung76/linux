@@ -17,29 +17,6 @@
 DEFINE_STATIC_KEY_FALSE(dynamic_scs_enabled);
 #endif
 
-#define _PAGE_VALID   _AC(0x1,UL)
-#define gstage_pgd_size    (1UL << (HGATP_PAGE_SHIFT + 2))
-int a=0;
-
-static void __init sfk_mapping(void)
-{
-	struct page *pgd_page;
-	pgd_page = (struct page *)alloc_pages(__GFP_GENESIS | __GFP_ZERO, get_order(gstage_pgd_size));
-	unsigned long hgatp = (HGATP_MODE_SV39X4 << HGATP_MODE_SHIFT);
-    	hgatp |= (page_to_phys(pgd_page) >> PAGE_SHIFT) & GENMASK(43,0);
-    //  _genesis_entry(/*svc_num SFK_WRITE_HGATP,
-		/*arg0*/// hgatp,
-		/*arg1*/// 0);
-	csr_write(CSR_HGATP, hgatp);
-    	pgprot_t pprot;
-  	pprot.pgprot = _PAGE_READ | _PAGE_WRITE | _PAGE_VALID | _PAGE_USER | _PAGE_ACCESSED | _PAGE_DIRTY;
-	uint64_t diff = 0xffffffd640000000 - 0xc0000000;
-    	create_pgd_mapping((pgd_t*)(diff + ((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT)),0x40000000,0xc0000000,PMD_SIZE,pprot);
-    	//create_pgd_mapping(phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT),0x40000000,0xc0000000,PMD_SIZE,pprot);
-
-    	asm volatile("sfence.vma" ::: "memory");
-}
-
 static void __scs_account(void *s, int account)
 {
 	struct page *scs_page = vmalloc_to_page(s);
@@ -70,7 +47,6 @@ static void *__scs_alloc(int node)
 				    GFP_SCS, PAGE_KERNEL, 0, node,
 				    __builtin_return_address(0));
 #else
-	if (a==0){ sfk_mapping(); a++;}
 	s = (void *)__get_free_page(__GFP_SFK);
 #endif
 

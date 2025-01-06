@@ -7,6 +7,7 @@ extern void _genesis_write_satp(unsigned long pgd);
 extern void _genesis_write_csr(unsigned long arg0);
 extern void _genesis_set_csr(unsigned long arg0);
 extern void _genesis_write_tvec(unsigned long arg0);
+extern void _sfk_write_hgatp(unsigned long arg0);
 
 /* COPY_TO/FROM USER */
 extern unsigned long __genesis_asm_copy_user(unsigned long arg0,
@@ -159,6 +160,9 @@ unsigned long __genesis inner_handler(unsigned long svc_num,
 		break;
 	case GENESIS_SET_CSR:
 		_genesis_set_csr(arg0);
+		break;
+	case SFK_WRITE_HGATP:
+		_sfk_write_hgatp(arg0);
 		break;
 
 	/* Page table modifications */
