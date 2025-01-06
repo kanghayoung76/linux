@@ -12,7 +12,6 @@
 #include <linux/vmalloc.h>
 #include <linux/vmstat.h>
 
-
 #ifdef CONFIG_DYNAMIC_SCS
 DEFINE_STATIC_KEY_FALSE(dynamic_scs_enabled);
 #endif
@@ -33,7 +32,7 @@ static void *__scs_alloc(int node)
 {
 	int i;
 	void *s;
-#ifndef CONFIG_GENESIS
+
 	for (i = 0; i < NR_CACHED_SCS; i++) {
 		s = this_cpu_xchg(scs_cache[i], NULL);
 		if (s) {
@@ -43,13 +42,10 @@ static void *__scs_alloc(int node)
 			goto out;
 		}
 	}
+
 	s = __vmalloc_node_range(SCS_SIZE, 1, VMALLOC_START, VMALLOC_END,
 				    GFP_SCS, PAGE_KERNEL, 0, node,
 				    __builtin_return_address(0));
-#else
-	s = (void *)__get_free_page(__GFP_GENESIS);
-//	printk("scs alloc address : 0x%lx",s);
-#endif
 
 out:
 	return kasan_reset_tag(s);
@@ -85,18 +81,13 @@ void scs_free(void *s)
 	 * so use this_cpu_cmpxchg to update the cache, and vfree_atomic
 	 * to free the stack.
 	 */
-#ifndef CONFIG_GENESIS
+
 	for (i = 0; i < NR_CACHED_SCS; i++)
 		if (this_cpu_cmpxchg(scs_cache[i], 0, s) == NULL)
 			return;
-#endif
 
 	kasan_unpoison_vmalloc(s, SCS_SIZE, KASAN_VMALLOC_PROT_NORMAL);
-#ifndef CONFIG_GENESIS
 	vfree_atomic(s);
-#else
-	free_page((unsigned long)s);
-#endif
 }
 
 static int scs_cleanup(unsigned int cpu)
@@ -104,12 +95,10 @@ static int scs_cleanup(unsigned int cpu)
 	int i;
 	void **cache = per_cpu_ptr(scs_cache, cpu);
 
-#ifndef CONFIG_GENESIS
 	for (i = 0; i < NR_CACHED_SCS; i++) {
 		vfree(cache[i]);
 		cache[i] = NULL;
 	}
-#endif
 
 	return 0;
 }
