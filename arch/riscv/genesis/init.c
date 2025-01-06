@@ -1,6 +1,7 @@
 #include <linux/init.h>
 #include <linux/gfp.h>
 #include <linux/memblock.h>
+#include <asm/io.h>
 
 #include <asm/genesis.h>
 #include <asm/vmlinux.lds.h>
@@ -28,6 +29,8 @@ extern char __genesis_text_begin[], __genesis_text_end[];
 #undef pr_fmt
 #define pr_fmt(fmt) "[GENESIS] " fmt
 
+
+
 void __init genesis_test(void)
 {
 	void *p, *p2;
@@ -53,6 +56,15 @@ void __init genesis_test(void)
 	*shadow_p3 = 12345;
 	pr_info("addr val: %d, shadow val: %d\n", *p3, *shadow_p3);
 	__disable_user_access();
+	free_page((unsigned long int)p3);
+
+	p3 = (int *)__get_free_page(__GFP_SFK);
+	pr_info("SFK addr: %px, shadow_addr: %lx\n", p3, __virt_to_shadow(p3));
+	*p3 = 111;
+	void* base = (void *)((uintptr_t)p3 & 0xffffffff);
+        unsigned long vall = 0;
+        asm volatile(HLV_W(%[val], %[addr]) :[val] "=&r" (vall): [addr] "r" (base) );
+	pr_info("kernel val: 0x%lx, vm val: 0x%lx\n", *p3, vall);
 	free_page((unsigned long int)p3);
 
 	pr_info("[GENESIS] TEST CODE END\n");

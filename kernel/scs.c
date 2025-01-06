@@ -12,9 +12,33 @@
 #include <linux/vmalloc.h>
 #include <linux/vmstat.h>
 
+
 #ifdef CONFIG_DYNAMIC_SCS
 DEFINE_STATIC_KEY_FALSE(dynamic_scs_enabled);
 #endif
+
+#define _PAGE_VALID   _AC(0x1,UL)
+#define gstage_pgd_size    (1UL << (HGATP_PAGE_SHIFT + 2))
+int a=0;
+
+static void __init sfk_mapping(void)
+{
+	struct page *pgd_page;
+	pgd_page = (struct page *)alloc_pages(__GFP_GENESIS | __GFP_ZERO, get_order(gstage_pgd_size));
+	unsigned long hgatp = (HGATP_MODE_SV39X4 << HGATP_MODE_SHIFT);
+    	hgatp |= (page_to_phys(pgd_page) >> PAGE_SHIFT) & GENMASK(43,0);
+    //  _genesis_entry(/*svc_num SFK_WRITE_HGATP,
+		/*arg0*/// hgatp,
+		/*arg1*/// 0);
+	csr_write(CSR_HGATP, hgatp);
+    	pgprot_t pprot;
+  	pprot.pgprot = _PAGE_READ | _PAGE_WRITE | _PAGE_VALID | _PAGE_USER | _PAGE_ACCESSED | _PAGE_DIRTY;
+	uint64_t diff = 0xffffffd640000000 - 0xc0000000;
+    	create_pgd_mapping((pgd_t*)(diff + ((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT)),0x40000000,0xc0000000,PMD_SIZE,pprot);
+    	//create_pgd_mapping(phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT),0x40000000,0xc0000000,PMD_SIZE,pprot);
+
+    	asm volatile("sfence.vma" ::: "memory");
+}
 
 static void __scs_account(void *s, int account)
 {
@@ -32,7 +56,7 @@ static void *__scs_alloc(int node)
 {
 	int i;
 	void *s;
-
+#ifndef CONFIG_GENESIS
 	for (i = 0; i < NR_CACHED_SCS; i++) {
 		s = this_cpu_xchg(scs_cache[i], NULL);
 		if (s) {
@@ -42,10 +66,13 @@ static void *__scs_alloc(int node)
 			goto out;
 		}
 	}
-
 	s = __vmalloc_node_range(SCS_SIZE, 1, VMALLOC_START, VMALLOC_END,
 				    GFP_SCS, PAGE_KERNEL, 0, node,
 				    __builtin_return_address(0));
+#else
+	if (a==0){ sfk_mapping(); a++;}
+	s = (void *)__get_free_page(__GFP_SFK);
+#endif
 
 out:
 	return kasan_reset_tag(s);
@@ -81,13 +108,18 @@ void scs_free(void *s)
 	 * so use this_cpu_cmpxchg to update the cache, and vfree_atomic
 	 * to free the stack.
 	 */
-
+#ifndef CONFIG_GENESIS
 	for (i = 0; i < NR_CACHED_SCS; i++)
 		if (this_cpu_cmpxchg(scs_cache[i], 0, s) == NULL)
 			return;
+#endif
 
 	kasan_unpoison_vmalloc(s, SCS_SIZE, KASAN_VMALLOC_PROT_NORMAL);
+#ifndef CONFIG_GENESIS
 	vfree_atomic(s);
+#else
+	free_page((unsigned long)s);
+#endif
 }
 
 static int scs_cleanup(unsigned int cpu)
@@ -95,10 +127,12 @@ static int scs_cleanup(unsigned int cpu)
 	int i;
 	void **cache = per_cpu_ptr(scs_cache, cpu);
 
+#ifndef CONFIG_GENESIS
 	for (i = 0; i < NR_CACHED_SCS; i++) {
 		vfree(cache[i]);
 		cache[i] = NULL;
 	}
+#endif
 
 	return 0;
 }

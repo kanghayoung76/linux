@@ -38,6 +38,7 @@
 
 #include "../kernel/head.h"
 
+
 struct kernel_mapping kernel_map __ro_after_init;
 EXPORT_SYMBOL(kernel_map);
 #ifdef CONFIG_XIP_KERNEL
@@ -90,8 +91,10 @@ static void __init zone_sizes_init(void)
         //FIXME: this configuration will be changed in a real board.
 #ifdef CONFIG_ZONE_DMA32
         max_zone_pfns[ZONE_DMA32] -= GENESIS_ZONE_SZ; // XXX: maybe REMOVE
+        max_zone_pfns[ZONE_DMA32] -= SFK_ZONE_SZ; // XXX: maybe REMOVE
 #endif
-        max_zone_pfns[ZONE_NORMAL] = max_low_pfn - GENESIS_ZONE_SZ;
+        max_zone_pfns[ZONE_NORMAL] = max_low_pfn - GENESIS_ZONE_SZ - SFK_ZONE_SZ;
+        max_zone_pfns[ZONE_SFK] = max_low_pfn - GENESIS_ZONE_SZ;
         max_zone_pfns[ZONE_GENESIS] = max_low_pfn;
 #endif
 
@@ -304,11 +307,14 @@ static void __init setup_bootmem(void)
         pr_info("[GENESIS] min_low_pfn: %lx, max_low_pfn: %lx\n",
                 min_low_pfn, max_low_pfn);
         pr_info("[GENESIS] phys_ram_end: %llx\n", phys_ram_end);
+        pr_info("[GENESIS] SFK_ZONE region : %llx - %llx\n",
+                /*start*/ phys_ram_end - (SFK_ZONE_SZ << PAGE_SHIFT) - (GENESIS_ZONE_SZ << PAGE_SHIFT),
+                /*end*/ phys_ram_end - (GENESIS_ZONE_SZ << PAGE_SHIFT));
         pr_info("[GENESIS] GENESIS_ZONE region : %llx - %llx\n",
                 /*start*/ phys_ram_end - (GENESIS_ZONE_SZ << PAGE_SHIFT),
                 /*end*/ phys_ram_end);
 #endif
-        memblock_set_current_limit(phys_ram_end - (GENESIS_ZONE_SZ << PAGE_SHIFT));
+        memblock_set_current_limit(phys_ram_end - (SFK_ZONE_SZ << PAGE_SHIFT) - (GENESIS_ZONE_SZ << PAGE_SHIFT));
 #endif
 
         reserve_initrd_mem();
@@ -1388,6 +1394,7 @@ static void __init create_linear_mapping_page_table(void)
 #endif
 }
 
+
 static void __init setup_vm_final(void)
 {
 	/* Setup swapper PGD for fixmap */
@@ -1417,7 +1424,7 @@ static void __init setup_vm_final(void)
 			   PGDIR_SIZE, PAGE_TABLE);
 
 	/* Map the linear mapping */
-	create_linear_mapping_page_table();
+	create_linear_mapping_page_table();	//for host
 
 	/* Map the kernel */
 	if (IS_ENABLED(CONFIG_64BIT))

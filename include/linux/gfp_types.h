@@ -58,6 +58,10 @@ enum {
 #ifdef CONFIG_SLAB_OBJ_EXT
 	___GFP_NO_OBJ_EXT_BIT,
 #endif
+#ifdef CONFIG_GENESIS
+	___GFP_SFK_BIT,
+	___GFP_GENESIS_BIT,
+#endif
 	___GFP_LAST_BIT
 };
 
@@ -103,6 +107,13 @@ enum {
 #else
 #define ___GFP_NO_OBJ_EXT       0
 #endif
+#ifdef CONFIG_GENESIS
+#define ___GFP_SFK		BIT(___GFP_SFK_BIT)
+#define ___GFP_GENESIS		BIT(___GFP_GENESIS_BIT)
+#else
+#define ___GFP_SFK		0
+#define ___GFP_GENESIS		0
+#endif
 
 /*
  * Physical address zone modifiers (see linux/mmzone.h - low four bits)
@@ -115,6 +126,8 @@ enum {
 #define __GFP_HIGHMEM	((__force gfp_t)___GFP_HIGHMEM)
 #define __GFP_DMA32	((__force gfp_t)___GFP_DMA32)
 #define __GFP_MOVABLE	((__force gfp_t)___GFP_MOVABLE)  /* ZONE_MOVABLE allowed */
+#define __GFP_SFK	((__force gfp_t)___GFP_SFK)
+#define __GFP_GENESIS	((__force gfp_t)___GFP_GENESIS)
 #define GFP_ZONEMASK	(__GFP_DMA|__GFP_HIGHMEM|__GFP_DMA32|__GFP_MOVABLE)
 
 /**
@@ -297,7 +310,7 @@ enum {
 
 /* Room for N __GFP_FOO bits */
 #define __GFP_BITS_SHIFT ___GFP_LAST_BIT
-#define __GFP_BITS_MASK ((__force gfp_t)((1 << __GFP_BITS_SHIFT) - 1))
+#define __GFP_BITS_MASK ((__force gfp_t)((1 << __GFP_BITS_SHIFT)) -1 )
 
 /**
  * DOC: Useful GFP flag combinations
