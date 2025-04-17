@@ -15,6 +15,7 @@
 #include <asm/smp.h>
 #include <asm/softirq_stack.h>
 #include <asm/stacktrace.h>
+#include <asm/insn-def.h>
 
 static struct fwnode_handle *(*__get_intc_node)(void);
 
@@ -55,9 +56,11 @@ static void __init sfk_mapping(void)
         //csr_write(CSR_HGATP, hgatp);
         pgprot_t pprot;
         pprot.pgprot = _PAGE_READ | _PAGE_WRITE | _PAGE_VALID | _PAGE_USER | _PAGE_ACCESSED | _PAGE_DIRTY;
-        create_pgd_mapping(phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT),0x40000000,0xc0000000,PMD_SIZE,pprot);
+        create_pgd_mapping((pgd_t *)phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT),0x40000000,0xc0000000,PMD_SIZE,pprot);
 
         asm volatile("sfence.vma" ::: "memory");
+        asm volatile(HFENCE_GVMA(zero, zero) ::: "memory");
+        asm volatile(HFENCE_VVMA(zero, zero) ::: "memory");
 }
 
 

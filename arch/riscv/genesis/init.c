@@ -7,6 +7,18 @@
 #include <asm/page.h>
 #include <asm/set_memory.h>
 
+#include <linux/interrupt.h>
+#include <linux/irqchip.h>
+#include <linux/irqdomain.h>
+#include <linux/module.h>
+#include <linux/scs.h>
+#include <linux/seq_file.h>
+#include <asm/sbi.h>
+#include <asm/smp.h>
+#include <asm/softirq_stack.h>
+#include <asm/stacktrace.h>
+#include <asm/insn-def.h>
+
 int genesis_enabled __ro_after_init = 0;
 
 /* FIXME: Use a unused hole
@@ -25,13 +37,37 @@ extern char __privinst_begin[], __privinst_end[];
 /* GENESIS Inner kernel Section */
 extern char __genesis_text_begin[], __genesis_text_end[];
 
+void __pi__genesis_entry(void)
+{}
+EXPORT_SYMBOL(__pi__genesis_entry);
+
+
 #undef pr_fmt
 #define pr_fmt(fmt) "[GENESIS] " fmt
 
+#define _PAGE_VALID   _AC(0x1,UL)
+#define gstage_pgd_size    (1UL << (HGATP_PAGE_SHIFT + 2))
 
 
 void __init genesis_test(void)
 {
+	////////////////////////////////////////////////
+/*	
+        struct page *pgd_page;
+        pgd_page = (struct page *)alloc_pages(__GFP_GENESIS | __GFP_ZERO, get_order(gstage_pgd_size));
+        unsigned long hgatp = (HGATP_MODE_SV39X4 << HGATP_MODE_SHIFT);
+        hgatp |= (page_to_phys(pgd_page) >> PAGE_SHIFT) & GENMASK(43,0);
+        csr_write(CSR_HGATP, hgatp);
+        pgprot_t pprot;
+        pprot.pgprot = _PAGE_READ | _PAGE_WRITE | _PAGE_VALID | _PAGE_USER | _PAGE_ACCESSED | _PAGE_DIRTY;
+        create_pgd_mapping((pgd_t *)phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT),0x40000000,0xc0000000,PMD_SIZE,pprot);
+
+        asm volatile("sfence.vma" ::: "memory");
+        asm volatile(HFENCE_GVMA(zero, zero) ::: "memory");
+        asm volatile(HFENCE_VVMA(zero, zero) ::: "memory");
+	*/
+	////////////////////////////////////////////////////
+
 	void *p, *p2;
 	int *p3, *shadow_p3;
 
@@ -57,14 +93,16 @@ void __init genesis_test(void)
 	__disable_user_access();
 	free_page((unsigned long int)p3);
 
+	
 	p3 = (int *)__get_free_page(__GFP_SFK);
 	pr_info("SFK addr: %px, shadow_addr: %lx\n", p3, __virt_to_shadow(p3));
-	*p3 = 111;
+	*(u64 *)p3 = 111111111ULL;
 	void* base = (void *)((uintptr_t)p3 & 0xffffffff);
-        unsigned long vall = 0;
-        asm volatile(HLV_W(%[val], %[addr]) :[val] "=&r" (vall): [addr] "r" (base) );
-	pr_info("kernel val: 0x%lx, vm val: 0x%lx\n", *p3, vall);
+        unsigned long long vall = 0;
+        asm volatile(HLV_D(%[val], %[addr]) :[val] "=&r" (vall): [addr] "r" (base) );
+	pr_info("kernel val: 0x%lx, vm val: 0x%lx, vm addr : 0x%lx\n", *p3, vall, base);
 	free_page((unsigned long int)p3);
+	
 
 	pr_info("[GENESIS] TEST CODE END\n");
 }
