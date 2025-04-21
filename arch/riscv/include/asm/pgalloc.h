@@ -187,7 +187,7 @@ static inline pgd_t *pgd_alloc(struct mm_struct *mm)
 {
 	pgd_t *pgd;
 
-	pgd = (pgd_t *)__get_free_page(__GFP_SFK);
+	pgd = (pgd_t *)__get_free_page(__GFP_GENESIS);
 	//pgd = (pgd_t *)__get_free_page(GFP_KERNEL);
 	if (likely(pgd != NULL)) {
 		memset(pgd, 0, USER_PTRS_PER_PGD * sizeof(pgd_t));
