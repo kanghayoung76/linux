@@ -119,9 +119,10 @@ static inline bool gfpflags_allow_blocking(const gfp_t gfp_flags)
 #define GFP_ZONES_SHIFT 2
 #elif defined(CONFIG_GENESIS) && (MAX_NR_ZONES-1) <= 4
 #define GFP_ZONES_SHIFT 2
-#else
+#elif (MAX_NR_ZONES-1) <= 4
 #define GFP_ZONES_SHIFT 2
-//#define GFP_ZONES_SHIFT ZONES_SHIFT
+#else
+#define GFP_ZONES_SHIFT ZONES_SHIFT
 #endif
 
 #if 16 * GFP_ZONES_SHIFT > BITS_PER_LONG
@@ -161,8 +162,13 @@ static inline enum zone_type gfp_zone(gfp_t flags)
 	enum zone_type z;
 	int bit = (__force int) (flags & GFP_ZONEMASK);
 
+#ifdef CONFIG_GENESIS
 	if (flags & __GFP_SFK)	return ZONE_SFK;
         if (flags & __GFP_GENESIS) return ZONE_GENESIS;
+#else
+	if (flags & __GFP_SFK)	return ZONE_SFK;
+        if (flags & __GFP_GENESIS) return ZONE_GENESIS;
+#endif
 
 	z = (GFP_ZONE_TABLE >> (bit * GFP_ZONES_SHIFT)) &
 					 ((1 << GFP_ZONES_SHIFT) - 1);

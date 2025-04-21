@@ -237,8 +237,13 @@ static int sysctl_lowmem_reserve_ratio[MAX_NR_ZONES] = {
 	[ZONE_HIGHMEM] = 0,
 #endif
 	[ZONE_MOVABLE] = 0,
+#ifdef CONFIG_GENESIS
         [ZONE_SFK] = 0,
         [ZONE_GENESIS] = 0,
+#else
+        [ZONE_SFK] = 0,
+        [ZONE_GENESIS] = 0,
+#endif
 
 };
 
