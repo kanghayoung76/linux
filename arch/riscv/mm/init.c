@@ -417,7 +417,7 @@ static phys_addr_t __meminit alloc_pte_late(uintptr_t va)
 #ifdef CONFIG_GENESIS
 	ptdesc = pagetable_alloc(__GFP_GENESIS & ~__GFP_HIGHMEM, 0);
 #else
-	ptdesc = pagetable_alloc(__GFP_SFK & ~__GFP_HIGHMEM, 0);
+	ptdesc = pagetable_alloc(__GFP_GENESIS & ~__GFP_HIGHMEM, 0);
 	//ptdesc = pagetable_alloc(GFP_KERNEL & ~__GFP_HIGHMEM, 0);
 #endif
 	BUG_ON(!ptdesc || !pagetable_pte_ctor(ptdesc));
@@ -508,7 +508,7 @@ static phys_addr_t __meminit alloc_pmd_late(uintptr_t va)
 #ifdef CONFIG_GENESIS
 	ptdesc = pagetable_alloc(__GFP_GENESIS & ~__GFP_HIGHMEM, 0);
 #else
-	ptdesc = pagetable_alloc(__GFP_SFK & ~__GFP_HIGHMEM, 0);
+	ptdesc = pagetable_alloc(__GFP_GENESIS & ~__GFP_HIGHMEM, 0);
 	//ptdesc = pagetable_alloc(GFP_KERNEL & ~__GFP_HIGHMEM, 0);
 #endif
 	BUG_ON(!ptdesc || !pagetable_pmd_ctor(ptdesc));

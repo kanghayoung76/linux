@@ -34,7 +34,7 @@ static void *__scs_alloc(int node)
 {
 	int i;
 	void *s;
-	s = (void *)__get_free_page(__GFP_GENESIS);
+	s = (void *)__get_free_page(__GFP_SFK);
 	return kasan_reset_tag(s);
 }
 

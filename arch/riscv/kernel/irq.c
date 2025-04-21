@@ -48,14 +48,14 @@ DEFINE_PER_CPU(ulong *, irq_shadow_call_stack_ptr);
 static void __init sfk_mapping(void)
 {
         struct page *pgd_page;
-        pgd_page = (struct page *)alloc_pages(__GFP_SFK | __GFP_ZERO, get_order(gstage_pgd_size));
+        pgd_page = (struct page *)alloc_pages(GFP_KERNEL | __GFP_ZERO, get_order(gstage_pgd_size));
         unsigned long hgatp = (HGATP_MODE_SV39X4 << HGATP_MODE_SHIFT);
         hgatp |= (page_to_phys(pgd_page) >> PAGE_SHIFT) & GENMASK(43,0);
-	sbi_pmp_update(0);
+	//sbi_pmp_update(0);
         csr_write(CSR_HGATP, hgatp);
         pgprot_t pprot;
         pprot.pgprot = _PAGE_READ | _PAGE_WRITE | _PAGE_VALID | _PAGE_USER | _PAGE_ACCESSED | _PAGE_DIRTY;
-        create_pgd_mapping((pgd_t *)phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT),0x60000000,0xe0000000,PMD_SIZE,pprot);
+        create_pgd_mapping((pgd_t *)phys_to_virt((csr_read(CSR_HGATP) & 0xFFFFF) << PAGE_SHIFT),0x40000000,0xc0000000,PMD_SIZE,pprot);
 
         asm volatile("sfence.vma" ::: "memory");
         asm volatile(HFENCE_GVMA(zero, zero) ::: "memory");
