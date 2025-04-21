@@ -58,10 +58,8 @@ enum {
 #ifdef CONFIG_SLAB_OBJ_EXT
 	___GFP_NO_OBJ_EXT_BIT,
 #endif
-#ifdef CONFIG_GENESIS
 	___GFP_SFK_BIT,
 	___GFP_GENESIS_BIT,
-#endif
 	___GFP_LAST_BIT
 };
 
@@ -107,13 +105,8 @@ enum {
 #else
 #define ___GFP_NO_OBJ_EXT       0
 #endif
-#ifdef CONFIG_GENESIS
 #define ___GFP_SFK		BIT(___GFP_SFK_BIT)
 #define ___GFP_GENESIS		BIT(___GFP_GENESIS_BIT)
-#else
-#define ___GFP_SFK		0
-#define ___GFP_GENESIS		0
-#endif
 
 /*
  * Physical address zone modifiers (see linux/mmzone.h - low four bits)

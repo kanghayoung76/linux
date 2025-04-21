@@ -17,7 +17,7 @@ long __sbi_base_ecall(int fid)
 }
 EXPORT_SYMBOL(__sbi_base_ecall);
 
-struct sbiret __sbi_ecall(unsigned long arg0, unsigned long arg1,
+noinstr struct sbiret __sbi_ecall(unsigned long arg0, unsigned long arg1,
 			  unsigned long arg2, unsigned long arg3,
 			  unsigned long arg4, unsigned long arg5,
 			  int fid, int ext)

@@ -23,8 +23,10 @@ enum sbi_ext_id {
 	SBI_EXT_0_1_REMOTE_SFENCE_VMA = 0x6,
 	SBI_EXT_0_1_REMOTE_SFENCE_VMA_ASID = 0x7,
 	SBI_EXT_0_1_SHUTDOWN = 0x8,
+	SBI_EXT_PMP_UPDATE = 0x12345,
 #endif
 	SBI_EXT_BASE = 0x10,
+	SBI_EXT_PMP_UPDATE = 0x12345,
 	SBI_EXT_TIME = 0x54494D45,
 	SBI_EXT_IPI = 0x735049,
 	SBI_EXT_RFENCE = 0x52464E43,
@@ -316,10 +318,12 @@ struct sbiret __sbi_ecall(unsigned long arg0, unsigned long arg1,
 #ifdef CONFIG_RISCV_SBI_V01
 void sbi_console_putchar(int ch);
 int sbi_console_getchar(void);
+int sbi_pmp_update(int ch); //////////
 #else
 static inline void sbi_console_putchar(int ch) { }
 static inline int sbi_console_getchar(void) { return -ENOENT; }
 #endif
+int sbi_pmp_update(int ch); //////////
 long sbi_get_mvendorid(void);
 long sbi_get_marchid(void);
 long sbi_get_mimpid(void);

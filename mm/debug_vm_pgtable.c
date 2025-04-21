@@ -36,6 +36,9 @@
 #include <asm/pgalloc.h>
 #include <asm/tlbflush.h>
 
+#include "/home/rkdgkdud/riscv-sfk/linux/arch/riscv/include/asm/sbi.h"
+
+
 /*
  * Please refer Documentation/mm/arch_pgtable_helpers.rst for the semantics
  * expectations that are being validated here. All future changes in here

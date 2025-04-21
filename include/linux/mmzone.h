@@ -810,10 +810,8 @@ enum zone_type {
 	 * there can be false negatives).
 	 */
 	ZONE_MOVABLE,
-#ifdef CONFIG_GENESIS
 	ZONE_SFK,
         ZONE_GENESIS,
-#endif
 #ifdef CONFIG_ZONE_DEVICE
 	ZONE_DEVICE,
 #endif

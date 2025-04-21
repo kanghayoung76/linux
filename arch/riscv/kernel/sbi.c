@@ -24,6 +24,20 @@ static int (*__sbi_rfence)(int fid, const struct cpumask *cpu_mask,
 			   unsigned long start, unsigned long size,
 			   unsigned long arg4, unsigned long arg5) __ro_after_init;
 
+void __pi_sbi_pmp_update(void)
+{}
+EXPORT_SYMBOL(__pi_sbi_pmp_update);
+
+noinstr int sbi_pmp_update(int ch)
+{
+
+        struct sbiret ret = sbi_ecall(SBI_EXT_BASE, SBI_EXT_PMP_UPDATE,
+                                      ch, 0, 0, 0, 0, 0);
+
+        return ret.error;          /* 0 = OK */
+}
+EXPORT_SYMBOL(sbi_pmp_update);
+
 #ifdef CONFIG_RISCV_SBI_V01
 static unsigned long __sbi_v01_cpumask_to_hartmask(const struct cpumask *cpu_mask)
 {
@@ -55,6 +69,7 @@ static unsigned long __sbi_v01_cpumask_to_hartmask(const struct cpumask *cpu_mas
  *
  * Return: None
  */
+
 void sbi_console_putchar(int ch)
 {
 	sbi_ecall(SBI_EXT_0_1_CONSOLE_PUTCHAR, 0, ch, 0, 0, 0, 0, 0);

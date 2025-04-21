@@ -1,4 +1,3 @@
-#ifndef _ASM_RISCV_GENESIS_H
 #define _ASM_RISCV_GENESIS_H
 
 /* Inner Kernel Section */
@@ -71,4 +70,3 @@ extern unsigned long shadow_offset_base;
 
 #endif /* __ASSEMBLY__ */
 
-#endif /* _ASM_RISCV_GENESIS_H */

@@ -38,7 +38,6 @@
 
 #include "../kernel/head.h"
 
-
 struct kernel_mapping kernel_map __ro_after_init;
 EXPORT_SYMBOL(kernel_map);
 #ifdef CONFIG_XIP_KERNEL
@@ -75,28 +74,20 @@ phys_addr_t dma32_phys_limit __initdata;
 static void __init zone_sizes_init(void)
 {
 	unsigned long max_zone_pfns[MAX_NR_ZONES] = { 0, };
-#ifdef CONFIG_GENESIS
-#if (GENESIS_DEBUG)
         pr_info("[GENESIS] dma32_phys_limit: %llx\n", dma32_phys_limit);
         pr_info("[GENESIS] max_low_pfn: %lx \n", max_low_pfn);
-#endif
-#endif
 
 #ifdef CONFIG_ZONE_DMA32
         max_zone_pfns[ZONE_DMA32] = PFN_DOWN(dma32_phys_limit);
 #endif
-#ifndef CONFIG_GENESIS
-        max_zone_pfns[ZONE_NORMAL] = max_low_pfn;
-#else
         //FIXME: this configuration will be changed in a real board.
 #ifdef CONFIG_ZONE_DMA32
-        max_zone_pfns[ZONE_DMA32] -= GENESIS_ZONE_SZ; // XXX: maybe REMOVE
-        max_zone_pfns[ZONE_DMA32] -= SFK_ZONE_SZ; // XXX: maybe REMOVE
+        max_zone_pfns[ZONE_DMA32] -= GENESIS_ZONE_SZ; // XXX: maybe REM
+	max_zone_pfns[ZONE_DMA32] -= SFK_ZONE_SZ;
 #endif
         max_zone_pfns[ZONE_NORMAL] = max_low_pfn - GENESIS_ZONE_SZ - SFK_ZONE_SZ;
         max_zone_pfns[ZONE_SFK] = max_low_pfn - GENESIS_ZONE_SZ;
         max_zone_pfns[ZONE_GENESIS] = max_low_pfn;
-#endif
 
 	free_area_init(max_zone_pfns);
 }
@@ -301,27 +292,21 @@ static void __init setup_bootmem(void)
 	dma32_phys_limit = min(4UL * SZ_1G, (unsigned long)PFN_PHYS(max_low_pfn));
 	set_max_mapnr(max_low_pfn - ARCH_PFN_OFFSET);
 
-#ifdef CONFIG_GENESIS
-#if (GENESIS_DEBUG) // for debug
         pr_info("[GENESIS] memblock_set_current_limit\n");
         pr_info("[GENESIS] min_low_pfn: %lx, max_low_pfn: %lx\n",
                 min_low_pfn, max_low_pfn);
         pr_info("[GENESIS] phys_ram_end: %llx\n", phys_ram_end);
-        pr_info("[GENESIS] SFK_ZONE region : %llx - %llx\n",
+	pr_info("[GENESIS] SFK_ZONE region : %llx - %llx\n",
                 /*start*/ phys_ram_end - (SFK_ZONE_SZ << PAGE_SHIFT) - (GENESIS_ZONE_SZ << PAGE_SHIFT),
                 /*end*/ phys_ram_end - (GENESIS_ZONE_SZ << PAGE_SHIFT));
         pr_info("[GENESIS] GENESIS_ZONE region : %llx - %llx\n",
                 /*start*/ phys_ram_end - (GENESIS_ZONE_SZ << PAGE_SHIFT),
                 /*end*/ phys_ram_end);
-#endif
-        memblock_set_current_limit(phys_ram_end - (SFK_ZONE_SZ << PAGE_SHIFT) - (GENESIS_ZONE_SZ << PAGE_SHIFT));
-#endif
+	memblock_set_current_limit(phys_ram_end - (SFK_ZONE_SZ << PAGE_SHIFT) - (GENESIS_ZONE_SZ << PAGE_SHIFT));
 
         reserve_initrd_mem();
 
-#ifdef CONFIG_GENESIS // XXX: RESOLVE and REMOVE
         pr_info("[GENESIS][FIXME] dtb_early_pa takes up the GENESIS memory.\n");
-#endif
 
 	/*
 	 * No allocation should be done before reserving the memory as defined
@@ -1394,7 +1379,6 @@ static void __init create_linear_mapping_page_table(void)
 #endif
 }
 
-
 static void __init setup_vm_final(void)
 {
 	/* Setup swapper PGD for fixmap */
@@ -1424,7 +1408,7 @@ static void __init setup_vm_final(void)
 			   PGDIR_SIZE, PAGE_TABLE);
 
 	/* Map the linear mapping */
-	create_linear_mapping_page_table();	//for host
+	create_linear_mapping_page_table();
 
 	/* Map the kernel */
 	if (IS_ENABLED(CONFIG_64BIT))

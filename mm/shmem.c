@@ -80,6 +80,7 @@ static struct vfsmount *shm_mnt __ro_after_init;
 #include <linux/uuid.h>
 #include <linux/quotaops.h>
 #include <linux/rcupdate_wait.h>
+#include "/home/rkdgkdud/riscv-sfk/linux/arch/riscv/include/asm/sbi.h"
 
 #include <linux/uaccess.h>
 

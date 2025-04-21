@@ -26,6 +26,7 @@
 #define task_scs_sp(tsk)	(task_thread_info(tsk)->scs_sp)
 
 void *scs_alloc(int node);
+void *scs_alloc_init(int node);
 void scs_free(void *s);
 void scs_init(void);
 int scs_prepare(struct task_struct *tsk, int node);
