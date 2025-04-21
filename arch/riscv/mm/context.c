@@ -16,6 +16,7 @@
 #include <asm/cacheflush.h>
 #include <asm/mmu_context.h>
 #include <asm/switch_to.h>
+#include "/home/rkdgkdud/riscv-sfk/linux/arch/riscv/include/asm/sbi.h"
 
 #ifdef CONFIG_MMU
 
@@ -190,6 +191,7 @@ static void set_mm_asid(struct mm_struct *mm, unsigned int cpu)
 
 switch_mm_fast:
 #ifndef CONFIG_GENESIS
+	sbi_pmp_update(0);
         csr_write(CSR_SATP, virt_to_pfn(mm->pgd) |
                   (cntx2asid(cntx) << SATP_ASID_SHIFT) |
                   satp_mode);
@@ -208,6 +210,7 @@ static void set_mm_noasid(struct mm_struct *mm)
 {
 	/* Switch the page table and blindly nuke entire local TLB */
 #ifndef CONFIG_GENESIS
+	sbi_pmp_update(0);
         csr_write(CSR_SATP, virt_to_pfn(mm->pgd) | satp_mode);
 #else
         _genesis_entry(/*svc_num*/ GENESIS_WRITE_SATP,

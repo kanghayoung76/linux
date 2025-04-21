@@ -19,7 +19,7 @@
 #ifndef CONFIG_GENESIS
 static inline pte_t *__pte_alloc_one_kernel_noprof(struct mm_struct *mm)
 {
-	struct ptdesc *ptdesc = pagetable_alloc_noprof(GFP_PGTABLE_KERNEL &
+	struct ptdesc *ptdesc = pagetable_alloc_noprof( GFP_PGTABLE_KERNEL &
 			~__GFP_HIGHMEM, 0);
 
 	if (!ptdesc)

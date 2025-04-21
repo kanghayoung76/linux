@@ -11,6 +11,7 @@
 #include <asm/csr.h>
 #include <asm/sbi.h>
 #include <asm/suspend.h>
+#include "/home/rkdgkdud/riscv-sfk/linux/arch/riscv/include/asm/sbi.h"
 
 void suspend_save_csrs(struct suspend_context *context)
 {
@@ -41,6 +42,7 @@ void suspend_restore_csrs(struct suspend_context *context)
                 csr_write(CSR_ENVCFG, context->envcfg);
 
 #ifndef CONFIG_GENESIS
+	sbi_pmp_update(0);
         csr_write(CSR_TVEC, context->tvec);
 #else
         _genesis_entry(/*svc_num*/ GENESIS_WRITE_TVEC,
@@ -51,6 +53,7 @@ void suspend_restore_csrs(struct suspend_context *context)
 
 #ifdef CONFIG_MMU
 #ifndef CONFIG_GENESIS
+	sbi_pmp_update(0);
         csr_write(CSR_SATP, context->satp);
 #else
         _genesis_entry(/*svc_num*/ GENESIS_WRITE_SATP,
