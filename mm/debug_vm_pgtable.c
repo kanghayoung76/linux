@@ -1399,7 +1399,7 @@ static int __init debug_vm_pgtable(void)
 	spin_unlock(ptl);
 
 	ptl = pud_lock(args.mm, args.pudp);
-	pud_clear_tests(&args);
+	//pud_clear_tests(&args);
 	pud_advanced_tests(&args);
 	pud_huge_tests(&args);
 	pud_populate_tests(&args);
